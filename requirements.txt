@@ -1,0 +1,5 @@
+numpy
+scipy
+soundfile
+plotly
+dash>=2.11
