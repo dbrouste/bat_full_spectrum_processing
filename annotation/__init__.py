@@ -1,4 +1,4 @@
-from .app import AppConfig, build_app, run_annotator
+from .app_v2 import AppConfig, build_app, run_annotator
 from .launcher import choose_wav_folder, run_annotator_dialog
 
 __all__ = [
