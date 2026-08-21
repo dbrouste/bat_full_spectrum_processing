@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bat-full-spectrum-processing"
+version = "0.1.0"
+description = "Tools for full-spectrum bat call processing, annotation, modelling, feature extraction, and benchmarking."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "soundfile",
+    "plotly",
+    "dash>=2.11",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bat_analysis*", "annotation*", "benchmark*"]
