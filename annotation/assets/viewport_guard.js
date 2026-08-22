@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 1.1";
+  const VERSION = "annotation-ui 1.2";
   const MODE_BUTTON_IDS = new Set(["new-chirp","add-point","move-point","delete-point","finish-chirp","delete-chirp"]);
   let savedViewport=null, interactionMode="navigation", lockUntil=0, restoring=false;
 
