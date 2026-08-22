@@ -1,7 +1,20 @@
-/* Annotation UI sizing */
-#db-floor,
+/* Annotation UI controls */
+#db-floor {
+  width: 360px !important;
+  min-width: 360px !important;
+  box-sizing: border-box !important;
+}
+
 #db-max {
+  display: inline-block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   width: 180px !important;
   min-width: 180px !important;
-  box-sizing: border-box;
+  box-sizing: border-box !important;
+}
+
+#db-floor,
+#db-max {
+  overflow: visible !important;
 }
