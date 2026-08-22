@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 0.4";
+  const VERSION = "annotation-ui 0.5";
   const MODE_BUTTON_IDS = new Set([
     "new-chirp",
     "add-point",
