@@ -153,6 +153,9 @@ def build_app(config: AppConfig) -> Dash:
     queue = [r for r in order if store.status(r) is None] + [r for r in order if store.status(r) is not None]
     spec_cache = {}
 
+    def review_queue() -> List[str]:
+        return [r for r in order if store.status(r) in {"annotated", "no_chirp"}]
+
     def load_spec(rel):
         if rel not in spec_cache:
             spec_cache[rel] = compute_spectrogram(
@@ -164,11 +167,16 @@ def build_app(config: AppConfig) -> Dash:
     def default_db_max(rel):
         return float(np.nanmax(load_spec(rel)["db"]))
 
-    def initial_file_state(index):
-        rel = queue[index]
+    def state_for_rel(rel: str, index: int, review_mode: bool = False,
+                      review_index: Optional[int] = None, normal_return_index: Optional[int] = None):
         rec = store.get(rel)
         chirps = rec.get("chirps", []) if rec else []
         next_id = max([c.get("chirp_id", 0) for c in chirps], default=0) + 1
+        status = rec.get("status") if rec else None
+        if review_mode:
+            message = f"Review mode — stored status: {status or 'unknown'}. Select an existing point or edit the file."
+        else:
+            message = "Use Navigation to frame the call, then New chirp."
         return {
             "index": index,
             "relative_path": rel,
@@ -176,9 +184,26 @@ def build_app(config: AppConfig) -> Dash:
             "active_chirp_id": None,
             "next_chirp_id": next_id,
             "mode": "navigate",
-            "message": "Use Navigation to frame the call, then New chirp.",
+            "message": message,
             "db_max_default": default_db_max(rel),
+            "review_mode": bool(review_mode),
+            "review_index": review_index,
+            "normal_return_index": normal_return_index,
+            "stored_status": status,
         }
+
+    def initial_file_state(index):
+        index = max(0, min(len(queue) - 1, index))
+        return state_for_rel(queue[index], index)
+
+    def review_file_state(review_index: int, normal_return_index: int):
+        rq = review_queue()
+        if not rq:
+            return None
+        review_index = max(0, min(len(rq) - 1, review_index))
+        rel = rq[review_index]
+        normal_index = queue.index(rel) if rel in queue else normal_return_index
+        return state_for_rel(rel, normal_index, True, review_index, normal_return_index)
 
     initial_state = initial_file_state(0)
     app = Dash(__name__)
@@ -229,6 +254,12 @@ def build_app(config: AppConfig) -> Dash:
             html.Button("No chirp", id="no-chirp", n_clicks=0),
             html.Button("Ignore / unusable", id="ignore", n_clicks=0),
             html.Button("Validate & next", id="validate-next", n_clicks=0),
+        ], style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginTop": "8px"}),
+        html.Div([
+            html.Button("Review retained", id="review-retained", n_clicks=0),
+            html.Button("Previous retained", id="prev-retained", n_clicks=0),
+            html.Button("Next retained", id="next-retained", n_clicks=0),
+            html.Button("Exit review", id="exit-review", n_clicks=0),
         ], style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginTop": "8px"}),
         html.Hr(),
         html.Div([
@@ -290,7 +321,15 @@ def build_app(config: AppConfig) -> Dash:
             info = f"{rel}  |  Fs={spec['sr']/1000:.1f} kHz  |  duration={spec['duration_ms']:.1f} ms"
         except Exception:
             info = rel
-        return info, f"{state['index'] + 1} / {len(queue)}", f"Mode: {state.get('mode', 'navigate')}", state.get("message", "")
+        if state.get("review_mode"):
+            rq = review_queue()
+            ri = int(state.get("review_index") or 0)
+            progress = f"Review {ri + 1} / {len(rq)}"
+            mode_label = f"Review | Mode: {state.get('mode', 'navigate')}"
+        else:
+            progress = f"{state['index'] + 1} / {len(queue)}"
+            mode_label = f"Mode: {state.get('mode', 'navigate')}"
+        return info, progress, mode_label, state.get("message", "")
 
     @app.callback(
         Output("viewport-state", "data"),
@@ -325,14 +364,18 @@ def build_app(config: AppConfig) -> Dash:
         Input("delete-chirp", "n_clicks"), Input("spectrogram", "clickData"),
         Input("prev-wav", "n_clicks"), Input("no-chirp", "n_clicks"),
         Input("ignore", "n_clicks"), Input("validate-next", "n_clicks"),
+        Input("review-retained", "n_clicks"), Input("prev-retained", "n_clicks"),
+        Input("next-retained", "n_clicks"), Input("exit-review", "n_clicks"),
         State("snap-enabled", "value"), State("db-floor", "value"),
         State("db-max", "value"), State("viewport-state", "data"),
         State("session-state", "data"), State("file-revision", "data"),
         State("annotation-revision", "data"), prevent_initial_call=True,
     )
     def controller(_new, _add, _move, _delete_point, _undo, _finish, _delete_chirp,
-                   click_data, _prev, _none, _ignore, _validate, snap_values,
-                   db_floor, db_max, viewport, state, file_revision, annotation_revision):
+                   click_data, _prev, _none, _ignore, _validate,
+                   _review_retained, _prev_retained, _next_retained, _exit_review,
+                   snap_values, db_floor, db_max, viewport, state,
+                   file_revision, annotation_revision):
         trigger = ctx.triggered_id
         state = dict(state)
         chirps = [dict(c) for c in state.get("chirps", [])]
@@ -350,8 +393,12 @@ def build_app(config: AppConfig) -> Dash:
         def save_current(status=None):
             rel = state["relative_path"]
             old = store.get(rel) or {}
+            requested_status = status
+            if state.get("review_mode") and status == "in_progress":
+                requested_status = old.get("status") or state.get("stored_status") or "in_progress"
+            final_status = requested_status or old.get("status") or "in_progress"
             store.set(rel, {
-                "status": status or old.get("status") or "in_progress",
+                "status": final_status,
                 "chirps": chirps,
                 "display": {
                     "db_floor": float(db_floor) if db_floor is not None else config.db_floor,
@@ -360,9 +407,54 @@ def build_app(config: AppConfig) -> Dash:
                     "fmax_khz": config.fmax_khz,
                 },
             })
+            state["stored_status"] = final_status
 
         def goto(index):
             return initial_file_state(max(0, min(len(queue) - 1, index)))
+
+        def goto_review(index):
+            normal_return = int(state.get("normal_return_index") if state.get("normal_return_index") is not None else state.get("index", 0))
+            return review_file_state(index, normal_return)
+
+        def next_review_state(delta=1):
+            rq = review_queue()
+            if not rq:
+                return None
+            current_rel = state.get("relative_path")
+            if current_rel in rq:
+                pos = rq.index(current_rel)
+            else:
+                pos = int(state.get("review_index") or 0)
+                pos = max(0, min(len(rq) - 1, pos))
+            return review_file_state(pos + delta, int(state.get("normal_return_index") or 0))
+
+        if trigger == "review-retained":
+            rq = review_queue()
+            if not rq:
+                state["message"] = "No retained files yet. Review includes annotated and no_chirp files."
+                return state, no_update, no_update
+            if not state.get("review_mode"):
+                save_current()
+            reviewed = review_file_state(0, int(state.get("index", 0)))
+            return reviewed, file_revision + 1, no_update
+
+        if trigger == "exit-review":
+            if not state.get("review_mode"):
+                state["message"] = "Review mode is not active."
+                return state, no_update, no_update
+            save_current()
+            return goto(int(state.get("normal_return_index") or 0)), file_revision + 1, no_update
+
+        if trigger in {"prev-retained", "next-retained"}:
+            if not state.get("review_mode"):
+                state["message"] = "Use Review retained first."
+                return state, no_update, no_update
+            save_current()
+            nxt = next_review_state(-1 if trigger == "prev-retained" else 1)
+            if nxt is None:
+                state["message"] = "No retained files available."
+                return state, no_update, no_update
+            return nxt, file_revision + 1, no_update
 
         if trigger == "new-chirp":
             cid = state.get("next_chirp_id", 1)
@@ -374,7 +466,7 @@ def build_app(config: AppConfig) -> Dash:
         if trigger == "add-point":
             if active_index() is None:
                 state["mode"] = "navigate"
-                state["message"] = "No active chirp."
+                state["message"] = "No active chirp. In Review, click one of its existing points to select it."
             else:
                 state["mode"] = "add_point"
                 state["message"] = "Annotation mode: click where PCHIP deviates from the chirp."
@@ -382,7 +474,7 @@ def build_app(config: AppConfig) -> Dash:
 
         if trigger == "move-point":
             if active_index() is None:
-                state["message"] = "No active chirp."
+                state["message"] = "No active chirp. In Review, click one of its existing points to select it."
             else:
                 state["mode"] = "move_select"
                 state.pop("selected_point_index", None)
@@ -391,7 +483,7 @@ def build_app(config: AppConfig) -> Dash:
 
         if trigger == "delete-point":
             if active_index() is None:
-                state["message"] = "No active chirp."
+                state["message"] = "No active chirp. In Review, click one of its existing points to select it."
             else:
                 state["mode"] = "delete_point"
                 state["message"] = "Click the point to delete."
@@ -439,11 +531,24 @@ def build_app(config: AppConfig) -> Dash:
             if not click_data or not click_data.get("points"):
                 return no_update, no_update, no_update
             pt = click_data["points"][0]
+
+            if state.get("mode", "navigate") == "navigate" and pt.get("customdata"):
+                custom = pt.get("customdata")
+                try:
+                    cid = int(custom[0])
+                except Exception:
+                    cid = None
+                if cid is not None and any(c.get("chirp_id") == cid for c in chirps):
+                    state["active_chirp_id"] = cid
+                    state["mode"] = "add_point"
+                    state["message"] = f"Chirp {cid} selected. You can Add, Move, Delete points, or Delete chirp."
+                    return state, no_update, no_update
+
             click_t, click_f = float(pt["x"]), float(pt["y"])
             mode = state.get("mode", "navigate")
             ai = active_index()
             if ai is None or mode == "navigate":
-                state["message"] = "Use New chirp or an edit action before clicking annotations."
+                state["message"] = "Use New chirp or select an existing chirp point before editing."
                 return state, no_update, no_update
 
             if mode in {"move_select", "delete_point"}:
@@ -512,12 +617,21 @@ def build_app(config: AppConfig) -> Dash:
 
         if trigger == "prev-wav":
             save_current()
+            if state.get("review_mode"):
+                nxt = next_review_state(-1)
+                return (nxt if nxt is not None else state), file_revision + (1 if nxt is not None else 0), no_update
             return goto(state["index"] - 1), file_revision + 1, no_update
 
         if trigger == "no-chirp":
             state["chirps"] = []
             chirps = state["chirps"]
             save_current("no_chirp")
+            if state.get("review_mode"):
+                nxt = next_review_state(1)
+                if nxt is not None and nxt["relative_path"] != state["relative_path"]:
+                    return nxt, file_revision + 1, no_update
+                state["message"] = "Saved as no_chirp. End of review queue."
+                return state, no_update, annotation_revision + 1
             if state["index"] < len(queue) - 1:
                 return goto(state["index"] + 1), file_revision + 1, no_update
             state["message"] = "Saved as no_chirp. End of queue."
@@ -525,6 +639,12 @@ def build_app(config: AppConfig) -> Dash:
 
         if trigger == "ignore":
             save_current("ignored")
+            if state.get("review_mode"):
+                nxt = next_review_state(1)
+                if nxt is not None and nxt["relative_path"] != state["relative_path"]:
+                    return nxt, file_revision + 1, no_update
+                state["message"] = "Saved as ignored. No more retained files after this one."
+                return state, no_update, no_update
             if state["index"] < len(queue) - 1:
                 return goto(state["index"] + 1), file_revision + 1, no_update
             state["message"] = "Saved as ignored. End of queue."
@@ -557,6 +677,12 @@ def build_app(config: AppConfig) -> Dash:
             state["active_chirp_id"] = None
             state["mode"] = "navigate"
             save_current("annotated")
+            if state.get("review_mode"):
+                nxt = next_review_state(1)
+                if nxt is not None and nxt["relative_path"] != state["relative_path"]:
+                    return nxt, file_revision + 1, no_update
+                state["message"] = "Annotation saved. End of review queue."
+                return state, no_update, no_update
             if state["index"] < len(queue) - 1:
                 return goto(state["index"] + 1), file_revision + 1, no_update
             state["message"] = "Annotation saved. End of queue."
