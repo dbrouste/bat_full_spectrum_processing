@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "interaction-guard-0.2";
+  const VERSION = "interaction-guard-0.3";
   const MODE_BUTTON_IDS = new Set([
     "new-chirp",
     "add-point",
@@ -72,7 +72,7 @@
   function lockViewport(durationMs) {
     snapshotViewport();
     if (!savedViewport) return;
-    lockUntil = Date.now() + durationMs;
+    lockUntil = Math.max(lockUntil, Date.now() + durationMs);
 
     function guardLoop() {
       if (Date.now() > lockUntil) return;
@@ -108,7 +108,7 @@
 
   function setInteractionMode(mode) {
     if (mode !== "navigation" && mode !== "annotation") return;
-    lockViewport(800);
+    lockViewport(1200);
     interactionMode = mode;
     applyInteractionMode();
   }
@@ -156,26 +156,37 @@
     applyInteractionMode();
   }
 
-  // Before Dash mode-changing buttons run, freeze the current viewport long
-  // enough to cover the complete asynchronous callback/render cycle.
   document.addEventListener(
     "mousedown",
     function (event) {
       const button = event.target.closest ? event.target.closest("button") : null;
       if (!button || !MODE_BUTTON_IDS.has(button.id)) return;
-      lockViewport(2200);
+      lockViewport(2500);
     },
     true
   );
 
-  // New chirp starts an annotation operation. Switch to annotation mode only
-  // after the Dash click has been delivered; the viewport remains locked.
+  // Annotation clicks also trigger a Dash callback that redraws annotation traces.
+  // Freeze the viewport BEFORE that click reaches Dash, and keep restoring it until
+  // the callback/render cycle is definitely finished.
+  document.addEventListener(
+    "mousedown",
+    function (event) {
+      if (interactionMode !== "annotation") return;
+      const graphRoot = document.getElementById("spectrogram");
+      if (!graphRoot || !graphRoot.contains(event.target)) return;
+      const plot = getPlot();
+      if (!plot || !plot.contains(event.target)) return;
+      lockViewport(3000);
+    },
+    true
+  );
+
   document.addEventListener(
     "click",
     function (event) {
       const button = event.target.closest ? event.target.closest("button") : null;
-      if (!button) return;
-      if (button.id === "new-chirp") {
+      if (button && button.id === "new-chirp") {
         interactionMode = "annotation";
         window.setTimeout(applyInteractionMode, 0);
       }
