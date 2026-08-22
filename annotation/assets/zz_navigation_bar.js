@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.3";
+  const VERSION = "annotation-ui 2.4";
   const NAV_ID = "spectrogram-navigator";
   const FRAME_ID = "spectrogram-navigator-frame";
   const FRAME_INSET = 3;
@@ -9,7 +9,7 @@
   let dragging = false;
   let dragStartClientX = 0;
   let dragStartRange = null;
-  let lastView = null;
+  let lastXView = null;
 
   function getMainPlot() {
     const root = document.getElementById("spectrogram");
@@ -35,61 +35,30 @@
     if (!values || values.length < 2) return null;
     const a = Number(values[0]);
     const b = Number(values[values.length - 1]);
-    return Number.isFinite(a) && Number.isFinite(b)
-      ? [Math.min(a, b), Math.max(a, b)]
-      : null;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+    return [Math.min(a, b), Math.max(a, b)];
   }
 
-  function fullDataRange(gd) {
+  function fullXRange(gd) {
     const hm = getHeatmap(gd);
-    if (!hm) return null;
-    const x = getArrayEnds(hm.x);
-    const y = getArrayEnds(hm.y);
-    return x && y ? {x: x, y: y} : null;
+    return hm ? getArrayEnds(hm.x) : null;
   }
 
-  function readCurrentView(gd) {
+  function readCurrentXView(gd) {
     if (!gd || !gd._fullLayout) return null;
-    const x = numericRange(gd._fullLayout.xaxis);
-    const y = numericRange(gd._fullLayout.yaxis);
-    return x && y ? {x: x, y: y} : null;
-  }
-
-  function initialiseLastView() {
-    const view = readCurrentView(getMainPlot());
-    if (view) lastView = {x: view.x.slice(), y: view.y.slice()};
-  }
-
-  function updateLastViewFromRelayout(eventData) {
-    const gd = getMainPlot();
-    const full = fullDataRange(gd);
-    if (!gd || !full) return;
-
-    if (!lastView) initialiseLastView();
-    if (!lastView) lastView = {x: full.x.slice(), y: full.y.slice()};
-
-    if (eventData && eventData["xaxis.autorange"] === true) {
-      lastView.x = full.x.slice();
-    } else if (eventData && eventData["xaxis.range"] && eventData["xaxis.range"].length === 2) {
-      lastView.x = [Number(eventData["xaxis.range"][0]), Number(eventData["xaxis.range"][1])].sort((a, b) => a - b);
-    } else if (eventData && eventData["xaxis.range[0]"] !== undefined && eventData["xaxis.range[1]"] !== undefined) {
-      lastView.x = [Number(eventData["xaxis.range[0]"]), Number(eventData["xaxis.range[1]"])].sort((a, b) => a - b);
-    }
-
-    if (eventData && eventData["yaxis.autorange"] === true) {
-      lastView.y = full.y.slice();
-    } else if (eventData && eventData["yaxis.range"] && eventData["yaxis.range"].length === 2) {
-      lastView.y = [Number(eventData["yaxis.range"][0]), Number(eventData["yaxis.range"][1])].sort((a, b) => a - b);
-    } else if (eventData && eventData["yaxis.range[0]"] !== undefined && eventData["yaxis.range[1]"] !== undefined) {
-      lastView.y = [Number(eventData["yaxis.range[0]"]), Number(eventData["yaxis.range[1]"])].sort((a, b) => a - b);
-    }
+    return numericRange(gd._fullLayout.xaxis);
   }
 
   function clampXRange(range, full) {
+    if (!range || !full) return null;
     const fullWidth = full[1] - full[0];
-    const width = Math.min(Math.max(range[1] - range[0], 0), fullWidth);
-    let x0 = range[0];
+    let width = range[1] - range[0];
+    if (!Number.isFinite(width) || width <= 0) width = fullWidth;
+    width = Math.min(width, fullWidth);
+
+    let x0 = Number(range[0]);
     let x1 = x0 + width;
+    if (!Number.isFinite(x0)) x0 = full[0];
     if (x0 < full[0]) {
       x0 = full[0];
       x1 = x0 + width;
@@ -99,6 +68,55 @@
       x0 = x1 - width;
     }
     return [x0, x1];
+  }
+
+  function initialiseLastXView() {
+    const gd = getMainPlot();
+    const full = fullXRange(gd);
+    const view = readCurrentXView(gd);
+    lastXView = clampXRange(view || full, full);
+  }
+
+  function extractXRange(eventData) {
+    if (!eventData) return null;
+    if (Array.isArray(eventData["xaxis.range"]) && eventData["xaxis.range"].length === 2) {
+      const a = Number(eventData["xaxis.range"][0]);
+      const b = Number(eventData["xaxis.range"][1]);
+      if (Number.isFinite(a) && Number.isFinite(b)) return [Math.min(a, b), Math.max(a, b)];
+    }
+    if (eventData["xaxis.range[0]"] !== undefined && eventData["xaxis.range[1]"] !== undefined) {
+      const a = Number(eventData["xaxis.range[0]"]);
+      const b = Number(eventData["xaxis.range[1]"]);
+      if (Number.isFinite(a) && Number.isFinite(b)) return [Math.min(a, b), Math.max(a, b)];
+    }
+    return null;
+  }
+
+  function updateLastXViewFromRelayout(eventData) {
+    const gd = getMainPlot();
+    const full = fullXRange(gd);
+    if (!full) return;
+
+    if (eventData && eventData["xaxis.autorange"] === true) {
+      lastXView = full.slice();
+      return;
+    }
+
+    const eventRange = extractXRange(eventData);
+    if (eventRange) {
+      lastXView = clampXRange(eventRange, full);
+      return;
+    }
+
+    // Some Plotly interactions report only a generic relayout event.
+    // In that case, read the range after Plotly has applied the interaction.
+    window.requestAnimationFrame(function () {
+      const current = readCurrentXView(getMainPlot());
+      if (current) {
+        lastXView = clampXRange(current, full);
+        updateFrame();
+      }
+    });
   }
 
   function createNavigatorContainer() {
@@ -125,14 +143,13 @@
     frame.style.cssText = [
       "position:absolute",
       "border:3px solid red",
-      "background:rgba(255,0,0,0.08)",
+      "background:rgba(255,0,0,0.06)",
       "box-sizing:border-box",
       "cursor:ew-resize",
       "z-index:100",
       "touch-action:none",
       "pointer-events:auto",
-      "min-width:8px",
-      "min-height:8px"
+      "min-width:8px"
     ].join(";");
 
     wrap.appendChild(plotDiv);
@@ -141,11 +158,12 @@
 
     frame.addEventListener("pointerdown", function (event) {
       const gd = getMainPlot();
-      const view = lastView || readCurrentView(gd);
-      if (!gd || !view) return;
+      const full = fullXRange(gd);
+      if (!gd || !full) return;
+      if (!lastXView) initialiseLastXView();
+      dragStartRange = (lastXView || full).slice();
       dragging = true;
       dragStartClientX = event.clientX;
-      dragStartRange = view.x.slice();
       frame.setPointerCapture(event.pointerId);
       event.preventDefault();
       event.stopPropagation();
@@ -154,26 +172,23 @@
     frame.addEventListener("pointermove", function (event) {
       if (!dragging || !dragStartRange) return;
       const gd = getMainPlot();
-      const full = fullDataRange(gd);
+      const full = fullXRange(gd);
       const navPlot = document.getElementById(NAV_ID + "-plot");
       if (!gd || !full || !navPlot || !window.Plotly) return;
 
       const rect = navPlot.getBoundingClientRect();
       const usableWidth = Math.max(rect.width - 2 * FRAME_INSET, 1);
-      const fullSpan = full.x[1] - full.x[0];
-      const dxData = (event.clientX - dragStartClientX) / usableWidth * fullSpan;
+      const dxData = (event.clientX - dragStartClientX) / usableWidth * (full[1] - full[0]);
       const candidate = [dragStartRange[0] + dxData, dragStartRange[1] + dxData];
-      const x = clampXRange(candidate, full.x);
+      const x = clampXRange(candidate, full);
 
-      if (!lastView) initialiseLastView();
-      if (!lastView) lastView = {x: x.slice(), y: full.y.slice()};
-      lastView.x = x.slice();
+      lastXView = x.slice();
       updateFrame();
-
       window.Plotly.relayout(gd, {
         "xaxis.range": x,
         "xaxis.autorange": false
       });
+
       event.preventDefault();
       event.stopPropagation();
     });
@@ -248,7 +263,7 @@
     Promise.resolve(promise).then(function () {
       const frame = document.getElementById(FRAME_ID);
       if (frame && frame.parentElement === wrap) wrap.appendChild(frame);
-      initialiseLastView();
+      initialiseLastXView();
       updateFrame();
     }).catch(function (err) {
       console.error("Navigator spectrogram render failed", err);
@@ -259,45 +274,38 @@
     const gd = getMainPlot();
     const navPlot = document.getElementById(NAV_ID + "-plot");
     const frame = document.getElementById(FRAME_ID);
-    const full = fullDataRange(gd);
-    const view = lastView || readCurrentView(gd);
-    if (!gd || !navPlot || !frame || !full || !view) return;
+    const full = fullXRange(gd);
+    if (!gd || !navPlot || !frame || !full) return;
 
     const rect = navPlot.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
 
+    if (!lastXView) initialiseLastXView();
+    const view = clampXRange(lastXView || full, full);
+    if (!view) return;
+
     const plotWidth = Math.max(rect.width - 2 * FRAME_INSET, 1);
-    const plotHeight = Math.max(rect.height - 2 * FRAME_INSET, 1);
-    const xSpan = Math.max(full.x[1] - full.x[0], 1e-12);
-    const ySpan = Math.max(full.y[1] - full.y[0], 1e-12);
+    const xSpan = Math.max(full[1] - full[0], 1e-12);
 
-    const xView = clampXRange(view.x, full.x);
-    const vx0 = xView[0];
-    const vx1 = xView[1];
-    const vy0 = Math.max(full.y[0], Math.min(full.y[1], view.y[0]));
-    const vy1 = Math.max(full.y[0], Math.min(full.y[1], view.y[1]));
-
-    const left = FRAME_INSET + (vx0 - full.x[0]) / xSpan * plotWidth;
-    const right = FRAME_INSET + (vx1 - full.x[0]) / xSpan * plotWidth;
-    const top = FRAME_INSET + (full.y[1] - vy1) / ySpan * plotHeight;
-    const bottom = FRAME_INSET + (full.y[1] - vy0) / ySpan * plotHeight;
+    const left = FRAME_INSET + (view[0] - full[0]) / xSpan * plotWidth;
+    const right = FRAME_INSET + (view[1] - full[0]) / xSpan * plotWidth;
 
     frame.style.display = "block";
     frame.style.left = Math.max(FRAME_INSET, left) + "px";
-    frame.style.top = Math.max(FRAME_INSET, top) + "px";
+    frame.style.top = FRAME_INSET + "px";
     frame.style.width = Math.max(8, Math.min(rect.width - FRAME_INSET, right) - Math.max(FRAME_INSET, left)) + "px";
-    frame.style.height = Math.max(8, Math.min(rect.height - FRAME_INSET, bottom) - Math.max(FRAME_INSET, top)) + "px";
+    frame.style.height = Math.max(8, rect.height - 2 * FRAME_INSET) + "px";
   }
 
   function bindMainPlotEvents() {
     const gd = getMainPlot();
     if (!gd || gd === boundPlot) return;
     boundPlot = gd;
-    initialiseLastView();
+    initialiseLastXView();
 
     if (typeof gd.on === "function") {
       gd.on("plotly_relayout", function (eventData) {
-        updateLastViewFromRelayout(eventData || {});
+        updateLastXViewFromRelayout(eventData || {});
         window.requestAnimationFrame(updateFrame);
       });
       gd.on("plotly_afterplot", function () {
