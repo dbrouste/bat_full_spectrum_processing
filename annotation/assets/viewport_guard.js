@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 0.9";
+  const VERSION = "annotation-ui 1.0";
   const MODE_BUTTON_IDS = new Set(["new-chirp","add-point","move-point","delete-point","finish-chirp","delete-chirp"]);
   let savedViewport=null, interactionMode="navigation", lockUntil=0, restoring=false;
 
@@ -12,28 +12,11 @@
   function setInteractionMode(m){if(m!=="navigation"&&m!=="annotation")return;lockViewport(1200);interactionMode=m;applyInteractionMode();}
   function addInteractionControls(){if(document.getElementById("interaction-mode-controls"))return;const g=document.getElementById("spectrogram");if(!g||!g.parentElement)return;const b=document.createElement("div");b.id="interaction-mode-controls";b.style.cssText="display:flex;gap:6px;align-items:center;margin:6px 0";const l=document.createElement("span");l.textContent="Graph mode:";l.style.fontWeight="600";const n=document.createElement("button");n.id="interaction-navigation";n.textContent="Navigation";n.onclick=()=>setInteractionMode("navigation");const a=document.createElement("button");a.id="interaction-annotation";a.textContent="Annotation";a.onclick=()=>setInteractionMode("annotation");b.append(l,n,a);g.parentElement.insertBefore(b,g);applyInteractionMode();}
 
-  function maxDbFromHeatmap(){const g=getPlot();if(!g||!g.data||!g.data[0]||!g.data[0].z)return 0;let m=-Infinity;for(const row of g.data[0].z){if(!row)continue;for(const x of row){const v=Number(x);if(Number.isFinite(v)&&v>m)m=v;}}return Number.isFinite(m)?m:0;}
-
   function styleNumericControls(){
     const floor=document.getElementById("db-floor");
-    if(floor){
-      floor.style.width="72px";floor.style.minWidth="72px";floor.style.maxWidth="72px";floor.style.flex="0 0 72px";floor.style.boxSizing="border-box";
-      if(floor.parentElement){floor.parentElement.style.flexShrink="0";floor.parentElement.style.flexWrap="nowrap";const l=floor.parentElement.querySelector("label");if(l)l.style.whiteSpace="nowrap";}
-    }
-
-    let max=document.getElementById("db-max");
-    if(!max && floor && floor.parentElement && floor.parentElement.parentElement){
-      const row=floor.parentElement.parentElement;
-      const wrap=document.createElement("div");wrap.id="db-max-fallback-wrapper";wrap.style.cssText="display:flex;align-items:center;gap:7px;flex:0 0 auto;flex-wrap:nowrap";
-      const label=document.createElement("label");label.textContent="dB max";label.style.whiteSpace="nowrap";
-      max=document.createElement("input");max.id="db-max";max.type="number";max.step="1";max.value=String(maxDbFromHeatmap());max.dataset.synthetic="1";
-      max.addEventListener("change",()=>{const g=getPlot(),v=Number(max.value);if(g&&window.Plotly&&Number.isFinite(v)){lockViewport(600);Plotly.restyle(g,{zmax:v},[0]);}});
-      wrap.append(label,max);row.insertBefore(wrap,floor.parentElement.nextSibling);
-    }
-    if(max){
-      max.style.display="inline-block";max.style.visibility="visible";max.style.opacity="1";max.style.width="90px";max.style.minWidth="90px";max.style.maxWidth="90px";max.style.flex="0 0 90px";max.style.boxSizing="border-box";
-      if(max.parentElement){max.parentElement.style.display="flex";max.parentElement.style.alignItems="center";max.parentElement.style.flexShrink="0";max.parentElement.style.flexWrap="nowrap";const l=max.parentElement.querySelector("label");if(l)l.style.whiteSpace="nowrap";}
-    }
+    if(floor){floor.style.width="48px";floor.style.minWidth="48px";floor.style.maxWidth="48px";floor.style.boxSizing="border-box";}
+    const max=document.getElementById("db-max");
+    if(max){max.style.display="inline-block";max.style.visibility="visible";max.style.width="90px";max.style.minWidth="90px";max.style.maxWidth="90px";max.style.boxSizing="border-box";}
   }
 
   document.addEventListener("mousedown",e=>{const b=e.target.closest?e.target.closest("button"):null;if(b&&MODE_BUTTON_IDS.has(b.id))lockViewport(2500);},true);
