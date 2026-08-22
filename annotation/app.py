@@ -262,10 +262,6 @@ def build_app(config: AppConfig) -> Dash:
         annotation_changed = "annotation-revision.data" in triggered
         session_changed = "session-state.data" in triggered
 
-        # For mode changes and annotation edits, only patch the light annotation
-        # traces. Because session-state is an Input, the patch always sees the
-        # latest points; this avoids the previous race where points existed in
-        # the controller but were absent from the graph.
         if not file_changed and (annotation_changed or session_changed):
             return annotation_patch(state.get("chirps", []))
 
@@ -535,8 +531,25 @@ def build_app(config: AppConfig) -> Dash:
             return state, no_update, no_update
 
         if trigger == "validate-next":
-            if [c for c in chirps if len(c.get("points", [])) < 2]:
-                state["message"] = "Cannot validate: at least one chirp has fewer than 2 points."
+            incomplete = [c for c in chirps if len(c.get("points", [])) < 2]
+            if incomplete:
+                bad = incomplete[0]
+                cid = bad.get("chirp_id", "?")
+                points = bad.get("points", [])
+                state["active_chirp_id"] = bad.get("chirp_id")
+                state["mode"] = "add_start_end" if len(points) < 2 else "add_point"
+                if len(points) == 1:
+                    p = points[0]
+                    state["message"] = (
+                        f"Cannot validate — Chirp {cid} incomplete: 1 point at "
+                        f"{float(p['t_ms']):.3f} ms / {float(p['f_khz']):.2f} kHz. "
+                        "Click END or delete the chirp."
+                    )
+                else:
+                    state["message"] = (
+                        f"Cannot validate — Chirp {cid} incomplete: 0 points (no position). "
+                        "Add START/END or delete the chirp."
+                    )
                 return state, no_update, no_update
             if not chirps:
                 state["message"] = "No chirp annotated. Use No chirp or Ignore."
