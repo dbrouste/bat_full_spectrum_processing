@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 1.5";
+  const VERSION = "annotation-ui 1.7";
   const ANNOTATION_COLOR = "red";
   let savedViewport = null;
   let interactionMode = "navigation";
@@ -72,8 +72,6 @@
     const gd = getPlot();
     if (!gd || !window.Plotly) return;
 
-    // Preserve the current viewport once. Do NOT continuously relayout the graph:
-    // repeated relayouts were swallowing the first annotation clicks.
     snapshotViewport();
 
     const update = interactionMode === "navigation"
@@ -158,9 +156,6 @@
     }
   }
 
-  // New chirp immediately switches the graph into annotation mode. There is no
-  // viewport lock loop here; Dash patches the annotation traces without touching
-  // the heatmap/layout, so the next graph click can be accepted immediately.
   document.addEventListener("click", function (event) {
     const button = event.target.closest ? event.target.closest("button") : null;
     if (button && button.id === "new-chirp") {
