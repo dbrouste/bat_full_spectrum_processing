@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 1.2";
+  const VERSION = "annotation-ui 1.3";
   const MODE_BUTTON_IDS = new Set(["new-chirp","add-point","move-point","delete-point","finish-chirp","delete-chirp"]);
   let savedViewport=null, interactionMode="navigation", lockUntil=0, restoring=false;
 
@@ -14,28 +14,9 @@
 
   function styleNumericControls(){
     const floor=document.getElementById("db-floor");
-    if(floor){
-      floor.style.width="40px";
-      floor.style.minWidth="40px";
-      floor.style.maxWidth="40px";
-      floor.style.boxSizing="border-box";
-    }
+    if(floor){floor.style.width="40px";floor.style.minWidth="40px";floor.style.maxWidth="40px";floor.style.boxSizing="border-box";}
     const max=document.getElementById("db-max");
-    if(max){
-      max.style.display="inline-block";
-      max.style.visibility="visible";
-      max.style.opacity="1";
-      max.style.width="90px";
-      max.style.minWidth="90px";
-      max.style.maxWidth="90px";
-      max.style.boxSizing="border-box";
-      if(max.parentElement){
-        max.parentElement.style.display="flex";
-        max.parentElement.style.visibility="visible";
-        max.parentElement.style.opacity="1";
-        max.parentElement.style.flex="0 0 auto";
-      }
-    }
+    if(max){max.style.display="inline-block";max.style.visibility="visible";max.style.opacity="1";max.style.width="90px";max.style.minWidth="90px";max.style.maxWidth="90px";max.style.boxSizing="border-box";if(max.parentElement){max.parentElement.style.display="flex";max.parentElement.style.visibility="visible";max.parentElement.style.opacity="1";max.parentElement.style.flex="0 0 auto";}}
   }
 
   document.addEventListener("mousedown",e=>{const b=e.target.closest?e.target.closest("button"):null;if(b&&MODE_BUTTON_IDS.has(b.id))lockViewport(2500);},true);
