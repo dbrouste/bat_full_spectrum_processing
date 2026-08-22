@@ -43,7 +43,21 @@ class AnnotationStore:
 
     def set(self, relative_path: str, record: Dict[str, Any]) -> None:
         self.data["files"][relative_path] = record
-        self.save()
+
+        # Creating a new chirp should be instantaneous.  The controller stores an
+        # in-progress chirp before it contains its first control point; there is
+        # no useful ground truth to persist yet, so defer the disk write until a
+        # point exists (or until the status becomes something other than
+        # in_progress).  This also prevents a filesystem write from blocking the
+        # New chirp UI transition.
+        chirps = record.get("chirps", [])
+        empty_in_progress = (
+            record.get("status") == "in_progress"
+            and bool(chirps)
+            and all(not chirp.get("points") for chirp in chirps)
+        )
+        if not empty_in_progress:
+            self.save()
 
     def status(self, relative_path: str) -> Optional[str]:
         return self.get(relative_path).get("status")
