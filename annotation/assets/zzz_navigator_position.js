@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.7";
+  const VERSION = "annotation-ui 2.8";
   const NAV_ID = "spectrogram-navigator";
 
   function placeNavigatorDirectlyBelowMainGraph() {
