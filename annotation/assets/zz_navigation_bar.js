@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.4";
+  const VERSION = "annotation-ui 2.5";
   const NAV_ID = "spectrogram-navigator";
   const FRAME_ID = "spectrogram-navigator-frame";
   const FRAME_INSET = 3;
@@ -14,6 +14,10 @@
   function getMainPlot() {
     const root = document.getElementById("spectrogram");
     return root ? root.querySelector(".js-plotly-plot") : null;
+  }
+
+  function getNavPlot() {
+    return document.getElementById(NAV_ID + "-plot");
   }
 
   function getHeatmap(gd) {
@@ -31,34 +35,33 @@
     return [Math.min(a, b), Math.max(a, b)];
   }
 
-  function getArrayEnds(values) {
-    if (!values || values.length < 2) return null;
-    const a = Number(values[0]);
-    const b = Number(values[values.length - 1]);
-    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-    return [Math.min(a, b), Math.max(a, b)];
+  // IMPORTANT: do not derive navigation geometry from heatmap.x. Dash/Plotly
+  // may keep x/z in a binary/typed representation that renders correctly but
+  // is not reliably indexable as a normal JavaScript array. Plotly's resolved
+  // axes are always numeric, so use those as the source of truth.
+  function readMainXRange() {
+    const gd = getMainPlot();
+    return gd && gd._fullLayout ? numericRange(gd._fullLayout.xaxis) : null;
   }
 
-  function fullXRange(gd) {
-    const hm = getHeatmap(gd);
-    return hm ? getArrayEnds(hm.x) : null;
-  }
-
-  function readCurrentXView(gd) {
-    if (!gd || !gd._fullLayout) return null;
-    return numericRange(gd._fullLayout.xaxis);
+  function readNavigatorFullXRange() {
+    const navPlot = getNavPlot();
+    return navPlot && navPlot._fullLayout ? numericRange(navPlot._fullLayout.xaxis) : null;
   }
 
   function clampXRange(range, full) {
     if (!range || !full) return null;
     const fullWidth = full[1] - full[0];
+    if (!(fullWidth > 0)) return null;
+
     let width = range[1] - range[0];
     if (!Number.isFinite(width) || width <= 0) width = fullWidth;
     width = Math.min(width, fullWidth);
 
     let x0 = Number(range[0]);
-    let x1 = x0 + width;
     if (!Number.isFinite(x0)) x0 = full[0];
+    let x1 = x0 + width;
+
     if (x0 < full[0]) {
       x0 = full[0];
       x1 = x0 + width;
@@ -71,49 +74,56 @@
   }
 
   function initialiseLastXView() {
-    const gd = getMainPlot();
-    const full = fullXRange(gd);
-    const view = readCurrentXView(gd);
-    lastXView = clampXRange(view || full, full);
+    const current = readMainXRange();
+    const full = readNavigatorFullXRange();
+    if (current && full) lastXView = clampXRange(current, full);
+    else if (current) lastXView = current.slice();
   }
 
   function extractXRange(eventData) {
     if (!eventData) return null;
-    if (Array.isArray(eventData["xaxis.range"]) && eventData["xaxis.range"].length === 2) {
-      const a = Number(eventData["xaxis.range"][0]);
-      const b = Number(eventData["xaxis.range"][1]);
-      if (Number.isFinite(a) && Number.isFinite(b)) return [Math.min(a, b), Math.max(a, b)];
+
+    const direct = eventData["xaxis.range"];
+    if (direct && direct.length === 2) {
+      const a = Number(direct[0]);
+      const b = Number(direct[1]);
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        return [Math.min(a, b), Math.max(a, b)];
+      }
     }
-    if (eventData["xaxis.range[0]"] !== undefined && eventData["xaxis.range[1]"] !== undefined) {
+
+    if (eventData["xaxis.range[0]"] !== undefined &&
+        eventData["xaxis.range[1]"] !== undefined) {
       const a = Number(eventData["xaxis.range[0]"]);
       const b = Number(eventData["xaxis.range[1]"]);
-      if (Number.isFinite(a) && Number.isFinite(b)) return [Math.min(a, b), Math.max(a, b)];
+      if (Number.isFinite(a) && Number.isFinite(b)) {
+        return [Math.min(a, b), Math.max(a, b)];
+      }
     }
     return null;
   }
 
   function updateLastXViewFromRelayout(eventData) {
-    const gd = getMainPlot();
-    const full = fullXRange(gd);
-    if (!full) return;
+    const full = readNavigatorFullXRange();
 
     if (eventData && eventData["xaxis.autorange"] === true) {
-      lastXView = full.slice();
+      lastXView = full ? full.slice() : readMainXRange();
       return;
     }
 
     const eventRange = extractXRange(eventData);
     if (eventRange) {
-      lastXView = clampXRange(eventRange, full);
+      lastXView = full ? clampXRange(eventRange, full) : eventRange;
       return;
     }
 
-    // Some Plotly interactions report only a generic relayout event.
-    // In that case, read the range after Plotly has applied the interaction.
+    // For generic relayout notifications, read the resolved Plotly axis after
+    // the browser has applied the interaction.
     window.requestAnimationFrame(function () {
-      const current = readCurrentXView(getMainPlot());
+      const current = readMainXRange();
+      const fullNow = readNavigatorFullXRange();
       if (current) {
-        lastXView = clampXRange(current, full);
+        lastXView = fullNow ? clampXRange(current, fullNow) : current.slice();
         updateFrame();
       }
     });
@@ -158,10 +168,13 @@
 
     frame.addEventListener("pointerdown", function (event) {
       const gd = getMainPlot();
-      const full = fullXRange(gd);
+      const full = readNavigatorFullXRange();
       if (!gd || !full) return;
+
       if (!lastXView) initialiseLastXView();
-      dragStartRange = (lastXView || full).slice();
+      dragStartRange = clampXRange(lastXView || readMainXRange() || full, full);
+      if (!dragStartRange) return;
+
       dragging = true;
       dragStartClientX = event.clientX;
       frame.setPointerCapture(event.pointerId);
@@ -172,8 +185,8 @@
     frame.addEventListener("pointermove", function (event) {
       if (!dragging || !dragStartRange) return;
       const gd = getMainPlot();
-      const full = fullXRange(gd);
-      const navPlot = document.getElementById(NAV_ID + "-plot");
+      const full = readNavigatorFullXRange();
+      const navPlot = getNavPlot();
       if (!gd || !full || !navPlot || !window.Plotly) return;
 
       const rect = navPlot.getBoundingClientRect();
@@ -181,6 +194,7 @@
       const dxData = (event.clientX - dragStartClientX) / usableWidth * (full[1] - full[0]);
       const candidate = [dragStartRange[0] + dxData, dragStartRange[1] + dxData];
       const x = clampXRange(candidate, full);
+      if (!x) return;
 
       lastXView = x.slice();
       updateFrame();
@@ -207,14 +221,13 @@
 
   function heatmapSignature(hm) {
     if (!hm) return "";
-    const xr = getArrayEnds(hm.x);
-    const yr = getArrayEnds(hm.y);
+    // Signature is only used to detect file/colour-scale changes. Avoid reading
+    // array elements; length may be available even when values are binary-backed.
     return [
       hm.x && hm.x.length,
       hm.y && hm.y.length,
-      xr && xr[0], xr && xr[1],
-      yr && yr[0], yr && yr[1],
-      hm.zmin, hm.zmax
+      hm.zmin,
+      hm.zmax
     ].join("|");
   }
 
@@ -222,7 +235,7 @@
     const gd = getMainPlot();
     const hm = getHeatmap(gd);
     const wrap = createNavigatorContainer();
-    const navPlot = document.getElementById(NAV_ID + "-plot");
+    const navPlot = getNavPlot();
     if (!gd || !hm || !wrap || !navPlot || !window.Plotly) return;
 
     const sig = heatmapSignature(hm);
@@ -271,29 +284,39 @@
   }
 
   function updateFrame() {
-    const gd = getMainPlot();
-    const navPlot = document.getElementById(NAV_ID + "-plot");
+    const navPlot = getNavPlot();
     const frame = document.getElementById(FRAME_ID);
-    const full = fullXRange(gd);
-    if (!gd || !navPlot || !frame || !full) return;
+    const full = readNavigatorFullXRange();
+    if (!navPlot || !frame || !full) return;
 
     const rect = navPlot.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
 
+    const current = readMainXRange();
+    if (current) {
+      const resolvedCurrent = clampXRange(current, full);
+      // Use the actual resolved axis whenever it is available. lastXView remains
+      // useful only during an in-progress drag before Plotly finishes relayout.
+      if (!dragging && resolvedCurrent) lastXView = resolvedCurrent;
+    }
+
     if (!lastXView) initialiseLastXView();
-    const view = clampXRange(lastXView || full, full);
+    const view = clampXRange(lastXView || current || full, full);
     if (!view) return;
 
     const plotWidth = Math.max(rect.width - 2 * FRAME_INSET, 1);
-    const xSpan = Math.max(full[1] - full[0], 1e-12);
+    const xSpan = full[1] - full[0];
+    if (!(xSpan > 0)) return;
 
-    const left = FRAME_INSET + (view[0] - full[0]) / xSpan * plotWidth;
-    const right = FRAME_INSET + (view[1] - full[0]) / xSpan * plotWidth;
+    const leftFrac = Math.max(0, Math.min(1, (view[0] - full[0]) / xSpan));
+    const rightFrac = Math.max(0, Math.min(1, (view[1] - full[0]) / xSpan));
+    const left = FRAME_INSET + leftFrac * plotWidth;
+    const right = FRAME_INSET + rightFrac * plotWidth;
 
     frame.style.display = "block";
-    frame.style.left = Math.max(FRAME_INSET, left) + "px";
+    frame.style.left = left + "px";
     frame.style.top = FRAME_INSET + "px";
-    frame.style.width = Math.max(8, Math.min(rect.width - FRAME_INSET, right) - Math.max(FRAME_INSET, left)) + "px";
+    frame.style.width = Math.max(8, right - left) + "px";
     frame.style.height = Math.max(8, rect.height - 2 * FRAME_INSET) + "px";
   }
 
@@ -301,12 +324,12 @@
     const gd = getMainPlot();
     if (!gd || gd === boundPlot) return;
     boundPlot = gd;
-    initialiseLastXView();
 
     if (typeof gd.on === "function") {
       gd.on("plotly_relayout", function (eventData) {
         updateLastXViewFromRelayout(eventData || {});
         window.requestAnimationFrame(updateFrame);
+        window.setTimeout(updateFrame, 25);
       });
       gd.on("plotly_afterplot", function () {
         renderNavigator(false);
