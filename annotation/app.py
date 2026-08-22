@@ -37,11 +37,7 @@ def discover_wavs(
     root: Path,
     max_duration_s: Optional[float] = 10.0,
 ) -> Tuple[List[Path], int, int]:
-    """Recursively discover WAV files and reject long/unreadable files cheaply.
-
-    Duration is read from the WAV header with soundfile.info(), so files longer
-    than ``max_duration_s`` are excluded before waveform loading or STFT.
-    """
+    """Recursively discover usable WAV files without loading their samples."""
     accepted: List[Path] = []
     skipped_long = 0
     unreadable = 0
@@ -61,7 +57,6 @@ def discover_wavs(
         if max_duration_s is not None and duration_s > float(max_duration_s):
             skipped_long += 1
             continue
-
         accepted.append(path)
 
     return accepted, skipped_long, unreadable
@@ -77,12 +72,10 @@ def pchip_curve(
     x = np.array([p["t_ms"] for p in pts], dtype=float)
     y = np.array([p["f_khz"] for p in pts], dtype=float)
 
-    # Keep the last point when several points share exactly the same time.
     last_for_time = {float(xv): i for i, xv in enumerate(x)}
     inds = np.array([last_for_time[v] for v in sorted(last_for_time)], dtype=int)
     x = x[inds]
     y = y[inds]
-
     if len(x) < 2:
         return np.array([]), np.array([])
 
@@ -92,34 +85,33 @@ def pchip_curve(
 
 
 def _viewport_ranges(
-    viewport: Optional[Dict[str, Any]],
-    relative_path: str,
+    viewport: Optional[Dict[str, Any]], relative_path: str
 ) -> Tuple[Optional[List[float]], Optional[List[float]]]:
-    """Return saved axis ranges only when they belong to the current WAV."""
     if not viewport or viewport.get("relative_path") != relative_path:
         return None, None
-
     xr = viewport.get("x_range")
     yr = viewport.get("y_range")
-
     if not (isinstance(xr, list) and len(xr) == 2):
         xr = None
     if not (isinstance(yr, list) and len(yr) == 2):
         yr = None
-
     return xr, yr
 
 
 def make_figure(
     spec: Dict[str, Any],
     chirps: List[Dict[str, Any]],
-    active_chirp_id: Optional[int],
     db_floor: float,
     db_ceiling: float,
     uirevision: str,
     x_range: Optional[List[float]] = None,
     y_range: Optional[List[float]] = None,
 ) -> go.Figure:
+    """Build the spectrogram plus annotation traces.
+
+    Annotation mode is intentionally NOT part of the figure. Changing mode must
+    never rebuild the graph; only actual graphical data changes do that.
+    """
     fig = go.Figure()
     fig.add_trace(
         go.Heatmap(
@@ -140,25 +132,18 @@ def make_figure(
         pts = chirp.get("points", [])
         if not pts:
             continue
-
-        is_active = chirp.get("chirp_id") == active_chirp_id
         xs = [p["t_ms"] for p in pts]
         ys = [p["f_khz"] for p in pts]
-
         fig.add_trace(
             go.Scatter(
                 x=xs,
                 y=ys,
                 mode="markers",
-                marker=dict(
-                    size=10 if is_active else 8,
-                    symbol="circle-open" if is_active else "circle",
-                ),
+                marker=dict(size=9, symbol="circle-open"),
                 name=f"Chirp {chirp['chirp_id']} points",
                 hovertemplate="t=%{x:.3f} ms<br>f=%{y:.2f} kHz<extra></extra>",
             )
         )
-
         if len(pts) >= 2:
             xx, yy = pchip_curve(pts)
             fig.add_trace(
@@ -166,7 +151,7 @@ def make_figure(
                     x=xx,
                     y=yy,
                     mode="lines",
-                    line=dict(width=3 if is_active else 2),
+                    line=dict(width=3),
                     name=f"Chirp {chirp['chirp_id']} PCHIP",
                     hoverinfo="skip",
                 )
@@ -179,21 +164,15 @@ def make_figure(
         clickmode="event+select",
         dragmode="zoom",
         uirevision=uirevision,
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0
-        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0),
     )
     fig.update_xaxes(showspikes=True, spikemode="across", spikesnap="cursor")
     fig.update_yaxes(showspikes=True, spikemode="across", spikesnap="cursor")
 
-    # Important: explicitly re-apply the current viewport whenever annotation
-    # actions rebuild the figure. uirevision alone is not reliable enough when
-    # traces are added/removed (e.g. clicking New chirp).
     if x_range is not None:
         fig.update_xaxes(range=x_range, autorange=False)
     if y_range is not None:
         fig.update_yaxes(range=y_range, autorange=False)
-
     return fig
 
 
@@ -219,7 +198,6 @@ def build_app(config: AppConfig) -> Dash:
     pending = [r for r in order if store.status(r) is None]
     processed = [r for r in order if store.status(r) is not None]
     queue = pending + processed
-
     spec_cache: Dict[str, Dict[str, Any]] = {}
 
     def load_spec(rel: str) -> Dict[str, Any]:
@@ -238,7 +216,6 @@ def build_app(config: AppConfig) -> Dash:
         rec = store.get(rel)
         chirps = rec.get("chirps", []) if rec else []
         next_id = max([c.get("chirp_id", 0) for c in chirps], default=0) + 1
-
         return {
             "index": index,
             "relative_path": rel,
@@ -255,20 +232,15 @@ def build_app(config: AppConfig) -> Dash:
     app.layout = html.Div(
         [
             dcc.Store(id="session-state", data=initial_file_state(0)),
-            # Viewport is deliberately separate from session-state. Zoom/pan must
-            # not cause annotation-state changes or redraw the spectrogram.
             dcc.Store(id="viewport-state", data={}),
+            # Incremented only when something visible in the graph changes.
+            dcc.Store(id="graph-revision", data=0),
             html.Div(
                 [
                     html.Div(id="file-label", style={"fontWeight": 600}),
                     html.Div(id="progress-label"),
                 ],
-                style={
-                    "display": "flex",
-                    "justifyContent": "space-between",
-                    "gap": "12px",
-                    "flexWrap": "wrap",
-                },
+                style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "flexWrap": "wrap"},
             ),
             html.Div(
                 [
@@ -280,31 +252,16 @@ def build_app(config: AppConfig) -> Dash:
                     html.Button("Finish chirp", id="finish-chirp", n_clicks=0),
                     html.Button("Delete chirp", id="delete-chirp", n_clicks=0),
                 ],
-                style={
-                    "display": "flex",
-                    "gap": "6px",
-                    "flexWrap": "wrap",
-                    "margin": "10px 0",
-                },
+                style={"display": "flex", "gap": "6px", "flexWrap": "wrap", "margin": "10px 0"},
             ),
             html.Div(
                 [
                     html.Div(
                         [
                             html.Label("dB floor"),
-                            dcc.Input(
-                                id="db-floor",
-                                type="number",
-                                value=config.db_floor,
-                                step=1,
-                                debounce=True,
-                            ),
+                            dcc.Input(id="db-floor", type="number", value=config.db_floor, step=1, debounce=True),
                         ],
-                        style={
-                            "display": "flex",
-                            "alignItems": "center",
-                            "gap": "6px",
-                        },
+                        style={"display": "flex", "alignItems": "center", "gap": "6px"},
                     ),
                     dcc.Checklist(
                         id="snap-enabled",
@@ -314,26 +271,14 @@ def build_app(config: AppConfig) -> Dash:
                     ),
                     html.Div(id="mode-label", style={"fontWeight": 600}),
                 ],
-                style={
-                    "display": "flex",
-                    "gap": "16px",
-                    "alignItems": "center",
-                    "flexWrap": "wrap",
-                },
+                style={"display": "flex", "gap": "16px", "alignItems": "center", "flexWrap": "wrap"},
             ),
             dcc.Graph(
                 id="spectrogram",
                 style={"height": "72vh"},
                 config={"displaylogo": False, "scrollZoom": True},
             ),
-            html.Div(
-                id="status-message",
-                style={
-                    "minHeight": "28px",
-                    "margin": "6px 0",
-                    "fontFamily": "monospace",
-                },
-            ),
+            html.Div(id="status-message", style={"minHeight": "28px", "margin": "6px 0", "fontFamily": "monospace"}),
             html.Div(
                 [
                     html.Button("Previous WAV", id="prev-wav", n_clicks=0),
@@ -341,12 +286,7 @@ def build_app(config: AppConfig) -> Dash:
                     html.Button("Ignore / unusable", id="ignore", n_clicks=0),
                     html.Button("Validate & next", id="validate-next", n_clicks=0),
                 ],
-                style={
-                    "display": "flex",
-                    "gap": "8px",
-                    "flexWrap": "wrap",
-                    "marginTop": "8px",
-                },
+                style={"display": "flex", "gap": "8px", "flexWrap": "wrap", "marginTop": "8px"},
             ),
             html.Hr(),
             html.Div(
@@ -355,15 +295,11 @@ def build_app(config: AppConfig) -> Dash:
                     html.Div(f"Annotations: {annotation_path}"),
                     html.Div(f"Seed: {config.seed}"),
                     html.Div(
-                        f"WAV accepted: {len(wav_paths)} | "
-                        f"skipped > {config.max_duration_s}s: {skipped_long} | "
-                        f"unreadable: {unreadable}"
+                        (f"WAV accepted: {len(wav_paths)} | skipped > {config.max_duration_s}s: {skipped_long} | unreadable: {unreadable}")
                         if config.max_duration_s is not None
                         else f"WAV accepted: {len(wav_paths)} | unreadable: {unreadable}"
                     ),
-                    html.Div(
-                        "Use the Plotly modebar for zoom, pan, autoscale and reset axes."
-                    ),
+                    html.Div("Use the Plotly modebar for zoom, pan, autoscale and reset axes."),
                 ],
                 style={"fontSize": "0.9rem", "opacity": 0.75},
             ),
@@ -371,46 +307,49 @@ def build_app(config: AppConfig) -> Dash:
         style={"maxWidth": "1500px", "margin": "0 auto", "padding": "12px"},
     )
 
+    # Graph redraw: only graph-revision/file data or dB floor changes can trigger this.
+    # Mode changes such as New chirp/Add point never touch the figure property.
     @app.callback(
         Output("spectrogram", "figure"),
-        Output("file-label", "children"),
-        Output("progress-label", "children"),
-        Output("mode-label", "children"),
-        Output("status-message", "children"),
-        Input("session-state", "data"),
+        Input("graph-revision", "data"),
         Input("db-floor", "value"),
+        State("session-state", "data"),
         State("viewport-state", "data"),
     )
-    def render(
-        state: Dict[str, Any],
-        db_floor: float,
-        viewport: Optional[Dict[str, Any]],
-    ):
+    def render_graph(_revision, db_floor, state, viewport):
         rel = state["relative_path"]
         try:
             spec = load_spec(rel)
             floor = float(db_floor) if db_floor is not None else config.db_floor
             xr, yr = _viewport_ranges(viewport, rel)
-            fig = make_figure(
+            return make_figure(
                 spec,
                 state.get("chirps", []),
-                state.get("active_chirp_id"),
                 floor,
                 config.db_ceiling,
                 uirevision=rel,
                 x_range=xr,
                 y_range=yr,
             )
-            info = (
-                f"{rel}  |  Fs={spec['sr']/1000:.1f} kHz  |  "
-                f"duration={spec['duration_ms']:.1f} ms"
-            )
         except Exception as exc:
-            fig = go.Figure().update_layout(title=f"Error loading {rel}: {exc}")
-            info = rel
+            return go.Figure().update_layout(title=f"Error loading {rel}: {exc}")
 
+    # Text/UI redraw is deliberately separate from the Plotly figure.
+    @app.callback(
+        Output("file-label", "children"),
+        Output("progress-label", "children"),
+        Output("mode-label", "children"),
+        Output("status-message", "children"),
+        Input("session-state", "data"),
+    )
+    def render_ui(state):
+        rel = state["relative_path"]
+        try:
+            spec = load_spec(rel)
+            info = f"{rel}  |  Fs={spec['sr']/1000:.1f} kHz  |  duration={spec['duration_ms']:.1f} ms"
+        except Exception:
+            info = rel
         return (
-            fig,
             info,
             f"{state['index'] + 1} / {len(queue)}",
             f"Mode: {state.get('mode', 'navigate')}",
@@ -424,42 +363,27 @@ def build_app(config: AppConfig) -> Dash:
         State("viewport-state", "data"),
         prevent_initial_call=True,
     )
-    def remember_view(
-        relayout: Optional[Dict[str, Any]],
-        state: Dict[str, Any],
-        viewport: Optional[Dict[str, Any]],
-    ):
+    def remember_view(relayout, state, viewport):
         if not relayout:
             return no_update
-
         rel = state["relative_path"]
-        view: Dict[str, Any] = (
-            dict(viewport)
-            if viewport and viewport.get("relative_path") == rel
-            else {"relative_path": rel}
-        )
+        view = dict(viewport) if viewport and viewport.get("relative_path") == rel else {"relative_path": rel}
         view["relative_path"] = rel
 
         if relayout.get("xaxis.autorange") is True:
             view.pop("x_range", None)
         elif "xaxis.range[0]" in relayout and "xaxis.range[1]" in relayout:
-            view["x_range"] = [
-                float(relayout["xaxis.range[0]"]),
-                float(relayout["xaxis.range[1]"]),
-            ]
+            view["x_range"] = [float(relayout["xaxis.range[0]"]), float(relayout["xaxis.range[1]"])]
 
         if relayout.get("yaxis.autorange") is True:
             view.pop("y_range", None)
         elif "yaxis.range[0]" in relayout and "yaxis.range[1]" in relayout:
-            view["y_range"] = [
-                float(relayout["yaxis.range[0]"]),
-                float(relayout["yaxis.range[1]"]),
-            ]
-
+            view["y_range"] = [float(relayout["yaxis.range[0]"]), float(relayout["yaxis.range[1]"])]
         return view
 
     @app.callback(
         Output("session-state", "data"),
+        Output("graph-revision", "data"),
         Input("new-chirp", "n_clicks"),
         Input("add-point", "n_clicks"),
         Input("move-point", "n_clicks"),
@@ -476,30 +400,22 @@ def build_app(config: AppConfig) -> Dash:
         State("db-floor", "value"),
         State("viewport-state", "data"),
         State("session-state", "data"),
+        State("graph-revision", "data"),
         prevent_initial_call=True,
     )
     def controller(
-        _new,
-        _add,
-        _move,
-        _delete_point,
-        _undo,
-        _finish,
-        _delete_chirp,
-        click_data,
-        _prev,
-        _none,
-        _ignore,
-        _validate,
-        snap_values,
-        db_floor,
-        viewport,
-        state,
+        _new, _add, _move, _delete_point, _undo, _finish, _delete_chirp,
+        click_data, _prev, _none, _ignore, _validate,
+        snap_values, db_floor, viewport, state, graph_revision,
     ):
         trigger = ctx.triggered_id
         state = dict(state)
         chirps = [dict(c) for c in state.get("chirps", [])]
         state["chirps"] = chirps
+        revision = int(graph_revision or 0)
+
+        def bump():
+            return revision + 1
 
         def active_index() -> Optional[int]:
             aid = state.get("active_chirp_id")
@@ -517,11 +433,7 @@ def build_app(config: AppConfig) -> Dash:
                     "status": status or old.get("status") or "in_progress",
                     "chirps": chirps,
                     "display": {
-                        "db_floor": (
-                            float(db_floor)
-                            if db_floor is not None
-                            else config.db_floor
-                        ),
+                        "db_floor": float(db_floor) if db_floor is not None else config.db_floor,
                         "fmin_khz": config.fmin_khz,
                         "fmax_khz": config.fmax_khz,
                     },
@@ -531,17 +443,14 @@ def build_app(config: AppConfig) -> Dash:
         def goto(index: int) -> Dict[str, Any]:
             return initial_file_state(max(0, min(len(queue) - 1, index)))
 
+        # Mode-only operations: never redraw the graph.
         if trigger == "new-chirp":
             cid = state.get("next_chirp_id", 1)
             chirps.append({"chirp_id": cid, "points": []})
-            state.update(
-                active_chirp_id=cid,
-                next_chirp_id=cid + 1,
-                mode="add_start_end",
-            )
+            state.update(active_chirp_id=cid, next_chirp_id=cid + 1, mode="add_start_end")
             state["message"] = f"Chirp {cid}: click START, then END."
             save_current("in_progress")
-            return state
+            return state, no_update
 
         if trigger == "add-point":
             if active_index() is None:
@@ -550,7 +459,7 @@ def build_app(config: AppConfig) -> Dash:
             else:
                 state["mode"] = "add_point"
                 state["message"] = "Click where PCHIP deviates from the chirp."
-            return state
+            return state, no_update
 
         if trigger == "move-point":
             if active_index() is None:
@@ -558,10 +467,8 @@ def build_app(config: AppConfig) -> Dash:
             else:
                 state["mode"] = "move_select"
                 state.pop("selected_point_index", None)
-                state["message"] = (
-                    "Click the point to move, then click its new position."
-                )
-            return state
+                state["message"] = "Click the point to move, then click its new position."
+            return state, no_update
 
         if trigger == "delete-point":
             if active_index() is None:
@@ -569,38 +476,32 @@ def build_app(config: AppConfig) -> Dash:
             else:
                 state["mode"] = "delete_point"
                 state["message"] = "Click the point to delete."
-            return state
+            return state, no_update
 
         if trigger == "undo":
             ai = active_index()
             if ai is not None and chirps[ai].get("points"):
                 removed = chirps[ai]["points"].pop()
-                state["message"] = (
-                    f"Removed last point at {removed['t_ms']:.3f} ms / "
-                    f"{removed['f_khz']:.2f} kHz."
-                )
+                state["message"] = f"Removed last point at {removed['t_ms']:.3f} ms / {removed['f_khz']:.2f} kHz."
                 save_current("in_progress")
-            else:
-                state["message"] = "Nothing to undo."
-            return state
+                return state, bump()
+            state["message"] = "Nothing to undo."
+            return state, no_update
 
         if trigger == "finish-chirp":
             ai = active_index()
             if ai is None:
                 state["message"] = "No active chirp."
-                return state
+                return state, no_update
             if len(chirps[ai].get("points", [])) < 2:
                 state["message"] = "A chirp needs at least START and END points."
-                return state
-
-            chirps[ai]["points"] = sorted(
-                chirps[ai]["points"], key=lambda p: p["t_ms"]
-            )
+                return state, no_update
+            chirps[ai]["points"] = sorted(chirps[ai]["points"], key=lambda p: p["t_ms"])
             state["active_chirp_id"] = None
             state["mode"] = "navigate"
             state["message"] = f"Chirp {chirps[ai]['chirp_id']} finished."
             save_current("in_progress")
-            return state
+            return state, no_update
 
         if trigger == "delete-chirp":
             ai = active_index()
@@ -611,82 +512,55 @@ def build_app(config: AppConfig) -> Dash:
                 state["mode"] = "navigate"
                 state["message"] = f"Deleted chirp {cid}."
                 save_current("in_progress")
-            else:
-                state["message"] = "No active chirp to delete."
-            return state
+                return state, bump()
+            state["message"] = "No active chirp to delete."
+            return state, no_update
 
         if trigger == "spectrogram":
             if not click_data or not click_data.get("points"):
-                return no_update
-
+                return no_update, no_update
             pt = click_data["points"][0]
             click_t = float(pt["x"])
             click_f = float(pt["y"])
             mode = state.get("mode", "navigate")
             ai = active_index()
-
             if ai is None or mode == "navigate":
-                state["message"] = (
-                    "Use 'New chirp' or an edit button before clicking the graph."
-                )
-                return state
+                state["message"] = "Use 'New chirp' or an edit button before clicking the graph."
+                return state, no_update
 
             if mode in {"move_select", "delete_point"}:
                 points = chirps[ai].get("points", [])
                 if not points:
                     state["message"] = "This chirp has no points."
-                    return state
-
+                    return state, no_update
                 spec = load_spec(state["relative_path"])
-                t_span = max(
-                    spec["times_ms"][-1] - spec["times_ms"][0], 1e-9
-                )
-                f_span = max(
-                    spec["freqs_khz"][-1] - spec["freqs_khz"][0], 1e-9
-                )
-                d2 = [
-                    ((p["t_ms"] - click_t) / t_span) ** 2
-                    + ((p["f_khz"] - click_f) / f_span) ** 2
-                    for p in points
-                ]
+                t_span = max(spec["times_ms"][-1] - spec["times_ms"][0], 1e-9)
+                f_span = max(spec["freqs_khz"][-1] - spec["freqs_khz"][0], 1e-9)
+                d2 = [((p["t_ms"] - click_t) / t_span) ** 2 + ((p["f_khz"] - click_f) / f_span) ** 2 for p in points]
                 pi = int(np.argmin(d2))
-
                 if mode == "delete_point":
                     removed = points.pop(pi)
                     state["mode"] = "add_point"
-                    state["message"] = (
-                        f"Deleted point {removed['t_ms']:.3f} ms / "
-                        f"{removed['f_khz']:.2f} kHz."
-                    )
+                    state["message"] = f"Deleted point {removed['t_ms']:.3f} ms / {removed['f_khz']:.2f} kHz."
                     save_current("in_progress")
-                    return state
-
+                    return state, bump()
                 state["selected_point_index"] = pi
                 state["mode"] = "move_place"
-                state["message"] = (
-                    f"Selected point #{pi + 1}. Click its new position."
-                )
-                return state
+                state["message"] = f"Selected point #{pi + 1}. Click its new position."
+                return state, no_update
 
             t_new, f_new, snap_db = click_t, click_f, float("nan")
             if "on" in (snap_values or []):
                 xr, yr = _viewport_ranges(viewport, state["relative_path"])
                 t_new, f_new, snap_db = snap_plus45_display(
-                    click_t,
-                    click_f,
-                    load_spec(state["relative_path"]),
-                    xr,
-                    yr,
-                    config.snap_half_length_px,
-                    config.snap_samples,
+                    click_t, click_f, load_spec(state["relative_path"]), xr, yr,
+                    config.snap_half_length_px, config.snap_samples,
                 )
 
             new_point = {
                 "t_ms": round(t_new, 6),
                 "f_khz": round(f_new, 6),
-                "source": (
-                    "snap+45" if "on" in (snap_values or []) else "manual"
-                ),
+                "source": "snap+45" if "on" in (snap_values or []) else "manual",
             }
             if np.isfinite(snap_db):
                 new_point["snap_db"] = round(float(snap_db), 3)
@@ -695,85 +569,64 @@ def build_app(config: AppConfig) -> Dash:
                 pi = state.pop("selected_point_index", None)
                 if pi is not None and 0 <= pi < len(chirps[ai]["points"]):
                     chirps[ai]["points"][pi] = new_point
-                    chirps[ai]["points"] = sorted(
-                        chirps[ai]["points"], key=lambda p: p["t_ms"]
-                    )
+                    chirps[ai]["points"] = sorted(chirps[ai]["points"], key=lambda p: p["t_ms"])
                     state["mode"] = "add_point"
-                    state["message"] = (
-                        f"Point moved to {t_new:.3f} ms / {f_new:.2f} kHz."
-                    )
+                    state["message"] = f"Point moved to {t_new:.3f} ms / {f_new:.2f} kHz."
                     save_current("in_progress")
-                return state
+                    return state, bump()
+                return state, no_update
 
             chirps[ai].setdefault("points", []).append(new_point)
-            chirps[ai]["points"] = sorted(
-                chirps[ai]["points"], key=lambda p: p["t_ms"]
-            )
+            chirps[ai]["points"] = sorted(chirps[ai]["points"], key=lambda p: p["t_ms"])
             npts = len(chirps[ai]["points"])
-
             if mode == "add_start_end":
                 if npts == 1:
-                    state["message"] = (
-                        f"START set at {t_new:.3f} ms / {f_new:.2f} kHz. "
-                        "Now click END."
-                    )
+                    state["message"] = f"START set at {t_new:.3f} ms / {f_new:.2f} kHz. Now click END."
                 else:
                     state["mode"] = "add_point"
-                    state["message"] = (
-                        "START/END set. Add intermediate points only where "
-                        "PCHIP deviates, then Finish chirp."
-                    )
+                    state["message"] = "START/END set. Add intermediate points only where PCHIP deviates, then Finish chirp."
             else:
-                state["message"] = (
-                    f"Point added: {t_new:.3f} ms / {f_new:.2f} kHz."
-                )
-
+                state["message"] = f"Point added: {t_new:.3f} ms / {f_new:.2f} kHz."
             save_current("in_progress")
-            return state
+            return state, bump()
 
         if trigger == "prev-wav":
             save_current()
-            return goto(state["index"] - 1)
+            return goto(state["index"] - 1), bump()
 
         if trigger == "no-chirp":
             state["chirps"] = []
             chirps = state["chirps"]
             save_current("no_chirp")
             if state["index"] < len(queue) - 1:
-                return goto(state["index"] + 1)
+                return goto(state["index"] + 1), bump()
             state["message"] = "Saved as no_chirp. End of queue."
-            return state
+            return state, bump()
 
         if trigger == "ignore":
             save_current("ignored")
             if state["index"] < len(queue) - 1:
-                return goto(state["index"] + 1)
+                return goto(state["index"] + 1), bump()
             state["message"] = "Saved as ignored. End of queue."
-            return state
+            return state, no_update
 
         if trigger == "validate-next":
             unfinished = [c for c in chirps if len(c.get("points", [])) < 2]
             if unfinished:
-                state["message"] = (
-                    "Cannot validate: at least one chirp has fewer than 2 points."
-                )
-                return state
+                state["message"] = "Cannot validate: at least one chirp has fewer than 2 points."
+                return state, no_update
             if not chirps:
-                state["message"] = (
-                    "No chirp annotated. Use 'No chirp' for a true negative, "
-                    "or 'Ignore'."
-                )
-                return state
-
+                state["message"] = "No chirp annotated. Use 'No chirp' for a true negative, or 'Ignore'."
+                return state, no_update
             state["active_chirp_id"] = None
             state["mode"] = "navigate"
             save_current("annotated")
             if state["index"] < len(queue) - 1:
-                return goto(state["index"] + 1)
+                return goto(state["index"] + 1), bump()
             state["message"] = "Annotation saved. End of queue."
-            return state
+            return state, no_update
 
-        return state
+        return state, no_update
 
     return app
 
@@ -792,7 +645,6 @@ def run_annotator(
     debug: bool = False,
     jupyter_mode: str = "external",
 ) -> Dash:
-    """Build and run the annotation app from a notebook or Python session."""
     cfg = AppConfig(
         root=folder,
         annotations=annotations,
