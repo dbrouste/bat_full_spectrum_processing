@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.2";
+  const VERSION = "annotation-ui 2.3";
   const NAV_ID = "spectrogram-navigator";
   const FRAME_ID = "spectrogram-navigator-frame";
   const FRAME_INSET = 3;
@@ -9,6 +9,7 @@
   let dragging = false;
   let dragStartClientX = 0;
   let dragStartRange = null;
+  let lastView = null;
 
   function getMainPlot() {
     const root = document.getElementById("spectrogram");
@@ -47,11 +48,41 @@
     return x && y ? {x: x, y: y} : null;
   }
 
-  function currentView(gd) {
+  function readCurrentView(gd) {
     if (!gd || !gd._fullLayout) return null;
     const x = numericRange(gd._fullLayout.xaxis);
     const y = numericRange(gd._fullLayout.yaxis);
     return x && y ? {x: x, y: y} : null;
+  }
+
+  function initialiseLastView() {
+    const view = readCurrentView(getMainPlot());
+    if (view) lastView = {x: view.x.slice(), y: view.y.slice()};
+  }
+
+  function updateLastViewFromRelayout(eventData) {
+    const gd = getMainPlot();
+    const full = fullDataRange(gd);
+    if (!gd || !full) return;
+
+    if (!lastView) initialiseLastView();
+    if (!lastView) lastView = {x: full.x.slice(), y: full.y.slice()};
+
+    if (eventData && eventData["xaxis.autorange"] === true) {
+      lastView.x = full.x.slice();
+    } else if (eventData && eventData["xaxis.range"] && eventData["xaxis.range"].length === 2) {
+      lastView.x = [Number(eventData["xaxis.range"][0]), Number(eventData["xaxis.range"][1])].sort((a, b) => a - b);
+    } else if (eventData && eventData["xaxis.range[0]"] !== undefined && eventData["xaxis.range[1]"] !== undefined) {
+      lastView.x = [Number(eventData["xaxis.range[0]"]), Number(eventData["xaxis.range[1]"])].sort((a, b) => a - b);
+    }
+
+    if (eventData && eventData["yaxis.autorange"] === true) {
+      lastView.y = full.y.slice();
+    } else if (eventData && eventData["yaxis.range"] && eventData["yaxis.range"].length === 2) {
+      lastView.y = [Number(eventData["yaxis.range"][0]), Number(eventData["yaxis.range"][1])].sort((a, b) => a - b);
+    } else if (eventData && eventData["yaxis.range[0]"] !== undefined && eventData["yaxis.range[1]"] !== undefined) {
+      lastView.y = [Number(eventData["yaxis.range[0]"]), Number(eventData["yaxis.range[1]"])].sort((a, b) => a - b);
+    }
   }
 
   function clampXRange(range, full) {
@@ -110,7 +141,7 @@
 
     frame.addEventListener("pointerdown", function (event) {
       const gd = getMainPlot();
-      const view = currentView(gd);
+      const view = lastView || readCurrentView(gd);
       if (!gd || !view) return;
       dragging = true;
       dragStartClientX = event.clientX;
@@ -134,11 +165,15 @@
       const candidate = [dragStartRange[0] + dxData, dragStartRange[1] + dxData];
       const x = clampXRange(candidate, full.x);
 
+      if (!lastView) initialiseLastView();
+      if (!lastView) lastView = {x: x.slice(), y: full.y.slice()};
+      lastView.x = x.slice();
+      updateFrame();
+
       window.Plotly.relayout(gd, {
         "xaxis.range": x,
         "xaxis.autorange": false
       });
-      updateFrame();
       event.preventDefault();
       event.stopPropagation();
     });
@@ -182,8 +217,6 @@
     }
     lastSignature = sig;
 
-    // Keep the exact rendering path that worked in v2.0: reuse Plotly's
-    // already-decoded Heatmap arrays directly and keep the navigator static.
     const trace = {
       type: "heatmap",
       x: hm.x,
@@ -213,9 +246,9 @@
       : window.Plotly.react(navPlot, [trace], layout, config);
 
     Promise.resolve(promise).then(function () {
-      // Ensure the HTML frame remains above any canvas/SVG layers created by Plotly.
       const frame = document.getElementById(FRAME_ID);
       if (frame && frame.parentElement === wrap) wrap.appendChild(frame);
+      initialiseLastView();
       updateFrame();
     }).catch(function (err) {
       console.error("Navigator spectrogram render failed", err);
@@ -227,7 +260,7 @@
     const navPlot = document.getElementById(NAV_ID + "-plot");
     const frame = document.getElementById(FRAME_ID);
     const full = fullDataRange(gd);
-    const view = currentView(gd);
+    const view = lastView || readCurrentView(gd);
     if (!gd || !navPlot || !frame || !full || !view) return;
 
     const rect = navPlot.getBoundingClientRect();
@@ -260,8 +293,11 @@
     const gd = getMainPlot();
     if (!gd || gd === boundPlot) return;
     boundPlot = gd;
+    initialiseLastView();
+
     if (typeof gd.on === "function") {
-      gd.on("plotly_relayout", function () {
+      gd.on("plotly_relayout", function (eventData) {
+        updateLastViewFromRelayout(eventData || {});
         window.requestAnimationFrame(updateFrame);
       });
       gd.on("plotly_afterplot", function () {
