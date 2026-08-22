@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 0.6";
+  const VERSION = "annotation-ui 0.7";
   const MODE_BUTTON_IDS = new Set([
     "new-chirp",
     "add-point",
@@ -13,6 +13,8 @@
   let interactionMode = "navigation";
   let lockUntil = 0;
   let restoring = false;
+  let syntheticDbMax = false;
+  let lastHeatmapSignature = null;
 
   function getPlot() {
     const root = document.getElementById("spectrogram");
@@ -156,6 +158,114 @@
     applyInteractionMode();
   }
 
+  function maxDbFromHeatmap() {
+    const gd = getPlot();
+    if (!gd || !gd.data || !gd.data.length || !gd.data[0].z) return 0;
+    let maxValue = -Infinity;
+    const z = gd.data[0].z;
+    for (let i = 0; i < z.length; i++) {
+      const row = z[i];
+      if (!row) continue;
+      for (let j = 0; j < row.length; j++) {
+        const v = Number(row[j]);
+        if (Number.isFinite(v) && v > maxValue) maxValue = v;
+      }
+    }
+    return Number.isFinite(maxValue) ? maxValue : 0;
+  }
+
+  function heatmapSignature() {
+    const gd = getPlot();
+    if (!gd || !gd.data || !gd.data.length) return null;
+    const tr = gd.data[0];
+    const nx = tr.x ? tr.x.length : 0;
+    const ny = tr.y ? tr.y.length : 0;
+    const x0 = nx ? tr.x[0] : null;
+    const x1 = nx ? tr.x[nx - 1] : null;
+    return [nx, ny, x0, x1].join("|");
+  }
+
+  function styleNumericControls() {
+    const floor = document.getElementById("db-floor");
+    if (floor) {
+      floor.style.width = "360px";
+      floor.style.minWidth = "360px";
+      floor.style.maxWidth = "360px";
+      floor.style.boxSizing = "border-box";
+      if (floor.parentElement) {
+        floor.parentElement.style.display = "flex";
+        floor.parentElement.style.alignItems = "center";
+        floor.parentElement.style.gap = "8px";
+        floor.parentElement.style.flexWrap = "nowrap";
+        const label = floor.parentElement.querySelector("label");
+        if (label) label.style.whiteSpace = "nowrap";
+      }
+    }
+
+    let dbMax = document.getElementById("db-max");
+    if (!dbMax && floor && floor.parentElement && floor.parentElement.parentElement) {
+      const controlsRow = floor.parentElement.parentElement;
+      const wrapper = document.createElement("div");
+      wrapper.id = "db-max-fallback-wrapper";
+      wrapper.style.display = "flex";
+      wrapper.style.alignItems = "center";
+      wrapper.style.gap = "8px";
+      wrapper.style.flexWrap = "nowrap";
+
+      const label = document.createElement("label");
+      label.textContent = "dB max";
+      label.htmlFor = "db-max";
+      label.style.whiteSpace = "nowrap";
+
+      dbMax = document.createElement("input");
+      dbMax.id = "db-max";
+      dbMax.type = "number";
+      dbMax.step = "1";
+      dbMax.value = String(maxDbFromHeatmap());
+      dbMax.dataset.synthetic = "1";
+      dbMax.addEventListener("change", function () {
+        const gd = getPlot();
+        const v = Number(dbMax.value);
+        if (!gd || !window.Plotly || !Number.isFinite(v)) return;
+        lockViewport(600);
+        window.Plotly.restyle(gd, {zmax: v}, [0]);
+      });
+
+      wrapper.appendChild(label);
+      wrapper.appendChild(dbMax);
+      controlsRow.insertBefore(wrapper, floor.parentElement.nextSibling);
+      syntheticDbMax = true;
+    }
+
+    if (dbMax) {
+      dbMax.style.display = "inline-block";
+      dbMax.style.visibility = "visible";
+      dbMax.style.opacity = "1";
+      dbMax.style.width = "180px";
+      dbMax.style.minWidth = "180px";
+      dbMax.style.maxWidth = "180px";
+      dbMax.style.boxSizing = "border-box";
+      if (dbMax.parentElement) {
+        dbMax.parentElement.style.display = "flex";
+        dbMax.parentElement.style.alignItems = "center";
+        dbMax.parentElement.style.gap = "8px";
+        dbMax.parentElement.style.flexWrap = "nowrap";
+        const label = dbMax.parentElement.querySelector("label");
+        if (label) label.style.whiteSpace = "nowrap";
+      }
+    }
+  }
+
+  function refreshSyntheticDbMaxForNewWave() {
+    if (!syntheticDbMax) return;
+    const sig = heatmapSignature();
+    if (!sig || sig === lastHeatmapSignature) return;
+    lastHeatmapSignature = sig;
+    const dbMax = document.getElementById("db-max");
+    if (!dbMax || dbMax.dataset.synthetic !== "1") return;
+    dbMax.value = String(maxDbFromHeatmap());
+  }
+
   document.addEventListener(
     "mousedown",
     function (event) {
@@ -209,14 +319,22 @@
     badge.textContent = VERSION;
   }
 
+  function maintainUi() {
+    styleNumericControls();
+    refreshSyntheticDbMaxForNewWave();
+  }
+
   function initialiseWhenReady() {
     addVersionBadge();
     addInteractionControls();
+    maintainUi();
     if (!getPlot()) {
       window.setTimeout(initialiseWhenReady, 150);
       return;
     }
+    lastHeatmapSignature = heatmapSignature();
     applyInteractionMode();
+    window.setInterval(maintainUi, 500);
   }
 
   if (document.readyState === "loading") {
