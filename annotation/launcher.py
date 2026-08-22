@@ -5,7 +5,7 @@ from typing import Optional
 
 from dash import Dash
 
-from .app_v2 import run_annotator
+from .app import run_annotator
 
 
 def choose_wav_folder(initial_dir: Optional[str] = None) -> Optional[str]:
