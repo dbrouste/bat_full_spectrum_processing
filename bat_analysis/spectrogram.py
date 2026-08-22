@@ -47,9 +47,13 @@ def compute_spectrogram(
     )
 
     power = np.abs(z) ** 2
-    tiny = np.finfo(float).tiny
-    ref = max(float(np.max(power)), tiny)
-    db = 10.0 * np.log10(np.maximum(power, tiny) / ref)
+    # Avoid forming power/ref before log10: with float32 STFT data, very small
+    # ratios can underflow to exactly zero and emit a divide-by-zero warning.
+    # log10(P) - log10(Pref) is mathematically equivalent and numerically safer.
+    tiny = np.finfo(power.dtype).tiny
+    power_safe = np.maximum(power, tiny)
+    ref = max(float(np.max(power_safe)), float(tiny))
+    db = 10.0 * (np.log10(power_safe) - np.log10(ref))
 
     f_khz = freqs / 1000.0
     t_ms = times * 1000.0
