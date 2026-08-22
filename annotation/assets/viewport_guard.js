@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 1.8";
+  const VERSION = "annotation-ui 2.0";
   const ANNOTATION_COLOR = "red";
   let savedViewport = null;
   let interactionMode = "navigation";
@@ -47,23 +47,15 @@
   function styleAnnotationTraces() {
     const gd = getPlot();
     if (!gd || !window.Plotly || !gd.data || gd.data.length < 3) return;
-
     const pointTrace = gd.data[1] || {};
     const curveTrace = gd.data[2] || {};
     const pointMarker = pointTrace.marker || {};
     const pointLine = pointMarker.line || {};
     const curveLine = curveTrace.line || {};
-
-    const pointsAlreadyRed = pointMarker.color === ANNOTATION_COLOR && pointLine.color === ANNOTATION_COLOR;
-    const curveAlreadyRed = curveLine.color === ANNOTATION_COLOR;
-
-    if (!pointsAlreadyRed) {
-      window.Plotly.restyle(gd, {
-        "marker.color": ANNOTATION_COLOR,
-        "marker.line.color": ANNOTATION_COLOR
-      }, [1]);
+    if (!(pointMarker.color === ANNOTATION_COLOR && pointLine.color === ANNOTATION_COLOR)) {
+      window.Plotly.restyle(gd, {"marker.color": ANNOTATION_COLOR,"marker.line.color": ANNOTATION_COLOR}, [1]);
     }
-    if (!curveAlreadyRed) {
+    if (curveLine.color !== ANNOTATION_COLOR) {
       window.Plotly.restyle(gd, {"line.color": ANNOTATION_COLOR}, [2]);
     }
   }
@@ -71,18 +63,14 @@
   function applyInteractionMode() {
     const gd = getPlot();
     if (!gd || !window.Plotly) return;
-
     snapshotViewport();
-
     const update = interactionMode === "navigation"
       ? {clickmode: "none", dragmode: "zoom"}
       : {clickmode: "event+select", dragmode: false};
-
     Promise.resolve(window.Plotly.relayout(gd, update)).then(function () {
       restoreViewportOnce();
       styleAnnotationTraces();
     });
-
     const nav = document.getElementById("interaction-navigation");
     const ann = document.getElementById("interaction-annotation");
     if (nav && ann) {
@@ -103,27 +91,22 @@
     if (document.getElementById("interaction-mode-controls")) return;
     const graphRoot = document.getElementById("spectrogram");
     if (!graphRoot || !graphRoot.parentElement) return;
-
     const box = document.createElement("div");
     box.id = "interaction-mode-controls";
     box.style.cssText = "display:flex;gap:6px;align-items:center;margin:6px 0";
-
     const label = document.createElement("span");
     label.textContent = "Graph mode:";
     label.style.fontWeight = "600";
-
     const nav = document.createElement("button");
     nav.id = "interaction-navigation";
     nav.type = "button";
     nav.textContent = "Navigation";
     nav.onclick = function () { setInteractionMode("navigation"); };
-
     const ann = document.createElement("button");
     ann.id = "interaction-annotation";
     ann.type = "button";
     ann.textContent = "Annotation";
     ann.onclick = function () { setInteractionMode("annotation"); };
-
     box.append(label, nav, ann);
     graphRoot.parentElement.insertBefore(box, graphRoot);
     applyInteractionMode();
@@ -137,7 +120,6 @@
       floor.style.maxWidth = "40px";
       floor.style.boxSizing = "border-box";
     }
-
     const max = document.getElementById("db-max");
     if (max) {
       max.style.display = "inline-block";
