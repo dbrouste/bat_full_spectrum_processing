@@ -1,7 +1,8 @@
 /* Annotation UI controls */
 #db-floor {
-  width: 360px !important;
-  min-width: 360px !important;
+  width: 40px !important;
+  min-width: 40px !important;
+  max-width: 40px !important;
   box-sizing: border-box !important;
 }
 
@@ -9,8 +10,9 @@
   display: inline-block !important;
   visibility: visible !important;
   opacity: 1 !important;
-  width: 180px !important;
-  min-width: 180px !important;
+  width: 90px !important;
+  min-width: 90px !important;
+  max-width: 90px !important;
   box-sizing: border-box !important;
 }
 
