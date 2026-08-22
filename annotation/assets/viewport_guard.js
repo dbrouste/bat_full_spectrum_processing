@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "interaction-guard-0.3";
+  const VERSION = "annotation-ui 0.4";
   const MODE_BUTTON_IDS = new Set([
     "new-chirp",
     "add-point",
@@ -166,9 +166,6 @@
     true
   );
 
-  // Annotation clicks also trigger a Dash callback that redraws annotation traces.
-  // Freeze the viewport BEFORE that click reaches Dash, and keep restoring it until
-  // the callback/render cycle is definitely finished.
   document.addEventListener(
     "mousedown",
     function (event) {
