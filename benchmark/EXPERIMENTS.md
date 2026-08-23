@@ -27,7 +27,9 @@ The truth set contains several call families, including long shallow calls aroun
 - general blob slope <= -2000 Hz/ms;
 - temporal-only echo NMS, which suppresses a second candidate even when it is far away in frequency.
 
-A dual-threshold / multiband detector was tested. The best balanced configuration in this small dataset was:
+### adaptive_v2
+
+A dual-threshold / multiband detector was tested. The balanced configuration is:
 
 ```python
 {
@@ -46,8 +48,6 @@ A dual-threshold / multiband detector was tested. The best balanced configuratio
 }
 ```
 
-Detection result:
-
 | metric | legacy | adaptive_v2 |
 |---|---:|---:|
 | TP | 113 | 145 |
@@ -57,13 +57,70 @@ Detection result:
 | recall | 0.7152 | 0.9177 |
 | F1 | 0.7559 | 0.8841 |
 
-A slightly more recall-oriented low-frequency height of 1500 Hz produced TP=146, FP=27, FN=12, recall=0.9241, F1=0.8822. The 2000 Hz setting was retained as the better balanced operating point.
+A slightly more recall-oriented low-frequency height of 1500 Hz produced TP=146, FP=27, FN=12, recall=0.9241, F1=0.8822. The 2000 Hz setting was retained as the better balanced v2 operating point.
+
+### adaptive_v3 — current experimental development mode
+
+Further error analysis showed two smaller opportunities that can be added without globally relaxing the detector:
+
+1. widening the time+frequency NMS from 16 to 20 ms removes one duplicate/echo FP without losing a TP;
+2. a narrow high-frequency recovery branch at 9 dB recovers one additional true call whose connected component does not satisfy the 10 dB general-branch height rule;
+3. a conservative 2-D bbox overlap deduplication removes one overlapping fragment while preserving simultaneous frequency-separated calls.
+
+Current v3 defaults:
+
+```python
+{
+    "slope_filter_mode": "adaptive_v3",
+    "snr_threshold_db": 10.0,
+    "lowfreq_snr_threshold_db": 9.0,
+    "general_max_blob_slope_hz_per_ms": -500.0,
+    "lowfreq_max_hz": 45000.0,
+    "lowfreq_min_blob_height_hz": 2000.0,
+    "lowfreq_min_width_ms": 1.0,
+    "highfreq_snr_threshold_db": 9.0,
+    "highfreq_min_hz": 50000.0,
+    "highfreq_min_blob_height_hz": 3000.0,
+    "highfreq_min_width_ms": 4.0,
+    "highfreq_min_blob_size": 10,
+    "highfreq_max_blob_slope_hz_per_ms": -1000.0,
+    "echo_suppression_window_ms": 20.0,
+    "echo_suppression_freq_window_hz": 25000.0,
+    "bbox_dedup_time_iou": 0.20,
+    "bbox_dedup_freq_iou": 0.40,
+}
+```
+
+Detection-only development result:
+
+| metric | adaptive_v2 | adaptive_v3 |
+|---|---:|---:|
+| TP | 145 | 146 |
+| FP | 25 | 24 |
+| FN | 13 | 12 |
+| precision | 0.8529 | 0.8588 |
+| recall | 0.9177 | 0.9241 |
+| F1 | 0.8841 | 0.8902 |
+
+The gain is deliberately small and conservative. v3 remains opt-in pending independent WAV/no_chirp validation.
+
+### Remaining FN after adaptive_v3
+
+The 12 remaining misses are concentrated rather than random:
+
+- 9 are weak/shallow calls around roughly 31–43 kHz, mostly 9–15 ms long; several fragment into tiny 0.75–1.5 kHz-high components even at 7–9 dB SNR;
+- 2 are moderate/high-frequency calls around 50–72 kHz whose SNR components remain fragmented or too small for the current blob rules;
+- 1 is a broad 63–120 kHz event occurring at the same time as a very strong lower-frequency connected component, so simple connected-component logic does not isolate the annotated high-frequency ridge.
+
+A low-frequency morphology/closing branch was tested. It recovered up to two extra TP but added enough FP that F1 did not improve (best tested result TP=147, FP=28, FN=11, F1=0.8829). It is therefore not retained.
+
+A more aggressive low-frequency SNR branch can reach TP=150 / FN=8, but FP rises to 37 and F1 falls to 0.8696. This is also rejected for now. The next useful step is to validate v3 on newly annotated/no_chirp WAVs before further relaxing weak-call detection.
 
 ## Frequency-seeded modelling
 
 With the improved detector, unseeded modelling can lock simultaneous frequency-separated candidates onto the same strongest spectral band. The modeller was therefore tested with the detector peak frequency as an initialization seed. The initial maximum is searched within +/-8 kHz of the seed, while the rest of the legacy ridge pipeline is unchanged.
 
-For the 145 matched TP of the balanced detector configuration:
+For the 145 matched TP of the v2 detector configuration:
 
 | metric | seeded result |
 |---|---:|
@@ -78,4 +135,4 @@ The largest improvement was on WAVs containing simultaneous bands/harmonics: fre
 
 ## Important limitation
 
-These values are development-set results, not an unbiased estimate of generalization. The detector parameters were selected on only 8 WAVs / 158 chirps and there are currently no validated `no_chirp` WAVs. Keep `adaptive_v2` opt-in until more annotations are available and a hold-out validation set can be reserved.
+These values are development-set results, not an unbiased estimate of generalization. The detector parameters were selected on only 8 WAVs / 158 chirps and there are currently no validated `no_chirp` WAVs. Keep `adaptive_v2` and `adaptive_v3` opt-in until more annotations are available and a hold-out validation set can be reserved.
