@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.8";
+  const VERSION = "annotation-ui 2.9";
   const NAV_ID = "spectrogram-navigator";
 
   function placeNavigatorDirectlyBelowMainGraph() {
@@ -7,14 +7,10 @@
     const navigator = document.getElementById(NAV_ID);
     if (!graphRoot || !navigator || !graphRoot.parentElement) return;
 
-    // Keep the navigator as the immediate DOM sibling of the main Dash graph:
-    // main spectrogram -> navigator -> status message -> WAV controls.
     if (graphRoot.nextElementSibling !== navigator) {
       graphRoot.insertAdjacentElement("afterend", navigator);
     }
 
-    // Align it with the plotting area while keeping it visually attached to the
-    // main spectrogram.
     navigator.style.marginTop = "0px";
     navigator.style.marginBottom = "8px";
   }
@@ -35,7 +31,7 @@
     maintain();
   }
 
-  // Dash can replace/reorder graph DOM nodes during callbacks. Re-assert the
-  // intended ordering cheaply without rebuilding either Plotly graph.
-  window.setInterval(maintain, 500);
+  // Position is cheap to verify; a slower interval leaves more browser time
+  // for Plotly while navigating between WAVs.
+  window.setInterval(maintain, 1500);
 })();
