@@ -12,6 +12,7 @@ dependencies = [
     "numpy",
     "scipy",
     "soundfile",
+    "pandas",
     "plotly",
     "dash>=2.11",
 ]
