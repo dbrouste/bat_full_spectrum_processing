@@ -1,5 +1,5 @@
 (function () {
-  const VERSION = "annotation-ui 2.8";
+  const VERSION = "annotation-ui 2.9";
   const ANNOTATION_COLOR = "red";
   let savedViewport = null;
   let interactionMode = "navigation";
