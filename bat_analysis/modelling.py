@@ -17,12 +17,15 @@ import librosa
 import numpy as np
 
 from bat_analysis import bfsp_clean_patched as base
+from bat_analysis import detection as detection_api
 
 
 # Re-export the detector/filter API so this file can be passed directly to
-# benchmark.runner.run_benchmark(..., analysis_py=...).
+# benchmark.runner.run_benchmark(..., analysis_py=...).  The detector wrapper
+# defaults to exact legacy behaviour, while allowing opt-in experimental modes
+# through detector_kwargs.
 high_pass_filter = base.high_pass_filter
-detect_candidates_snr_blobs = base.detect_candidates_snr_blobs
+detect_candidates_snr_blobs = detection_api.detect_candidates_snr_blobs
 
 
 @dataclass
