@@ -1,11 +1,12 @@
 (function () {
-  const VERSION = "annotation-ui 2.5";
+  const VERSION = "annotation-ui 2.9";
   const NAV_ID = "spectrogram-navigator";
   const FRAME_ID = "spectrogram-navigator-frame";
   const FRAME_INSET = 3;
 
   let boundPlot = null;
   let lastSignature = "";
+  let lastFileKey = null;
   let dragging = false;
   let dragStartClientX = 0;
   let dragStartRange = null;
@@ -27,6 +28,13 @@
     return null;
   }
 
+  function currentFileKey(gd) {
+    if (!gd) return "";
+    const direct = gd.layout && gd.layout.uirevision;
+    const resolved = gd._fullLayout && gd._fullLayout.uirevision;
+    return String(direct !== undefined && direct !== null ? direct : (resolved || ""));
+  }
+
   function numericRange(axis) {
     if (!axis || !axis.range || axis.range.length !== 2) return null;
     const a = Number(axis.range[0]);
@@ -35,10 +43,6 @@
     return [Math.min(a, b), Math.max(a, b)];
   }
 
-  // IMPORTANT: do not derive navigation geometry from heatmap.x. Dash/Plotly
-  // may keep x/z in a binary/typed representation that renders correctly but
-  // is not reliably indexable as a normal JavaScript array. Plotly's resolved
-  // axes are always numeric, so use those as the source of truth.
   function readMainXRange() {
     const gd = getMainPlot();
     return gd && gd._fullLayout ? numericRange(gd._fullLayout.xaxis) : null;
@@ -117,8 +121,6 @@
       return;
     }
 
-    // For generic relayout notifications, read the resolved Plotly axis after
-    // the browser has applied the interaction.
     window.requestAnimationFrame(function () {
       const current = readMainXRange();
       const fullNow = readNavigatorFullXRange();
@@ -221,8 +223,6 @@
 
   function heatmapSignature(hm) {
     if (!hm) return "";
-    // Signature is only used to detect file/colour-scale changes. Avoid reading
-    // array elements; length may be available even when values are binary-backed.
     return [
       hm.x && hm.x.length,
       hm.y && hm.y.length,
@@ -238,8 +238,16 @@
     const navPlot = getNavPlot();
     if (!gd || !hm || !wrap || !navPlot || !window.Plotly) return;
 
-    const sig = heatmapSignature(hm);
-    if (!force && sig === lastSignature && navPlot.data && navPlot.data.length) {
+    const fileKey = currentFileKey(gd);
+    const fileChanged = fileKey !== lastFileKey;
+    if (fileChanged) {
+      lastFileKey = fileKey;
+      lastSignature = "";
+      lastXView = null;
+    }
+
+    const sig = fileKey + "|" + heatmapSignature(hm);
+    if (!force && !fileChanged && sig === lastSignature && navPlot.data && navPlot.data.length) {
       updateFrame();
       return;
     }
@@ -264,7 +272,8 @@
       paper_bgcolor: "#eee",
       plot_bgcolor: "#eee",
       dragmode: false,
-      showlegend: false
+      showlegend: false,
+      uirevision: fileKey
     };
     const config = {displayModeBar: false, responsive: true, staticPlot: true};
 
@@ -295,8 +304,6 @@
     const current = readMainXRange();
     if (current) {
       const resolvedCurrent = clampXRange(current, full);
-      // Use the actual resolved axis whenever it is available. lastXView remains
-      // useful only during an in-progress drag before Plotly finishes relayout.
       if (!dragging && resolvedCurrent) lastXView = resolvedCurrent;
     }
 
@@ -343,6 +350,14 @@
     if (badge) badge.textContent = VERSION;
   }
 
+  function maintain() {
+    setVersion();
+    createNavigatorContainer();
+    bindMainPlotEvents();
+    renderNavigator(false);
+    updateFrame();
+  }
+
   function init() {
     setVersion();
     createNavigatorContainer();
@@ -352,13 +367,8 @@
     }
     bindMainPlotEvents();
     renderNavigator(true);
-    window.setInterval(function () {
-      setVersion();
-      createNavigatorContainer();
-      bindMainPlotEvents();
-      renderNavigator(false);
-      updateFrame();
-    }, 500);
+    // Slow safety check only. Normal updates are event-driven through Plotly.
+    window.setInterval(maintain, 1500);
   }
 
   if (document.readyState === "loading") {
