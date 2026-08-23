@@ -30,6 +30,8 @@ DEFAULT_DETECTOR_KWARGS = {
     "echo_suppression_window_ms": 10.0,
 }
 
+VALID_BENCHMARK_STATUSES = {"annotated", "no_chirp"}
+
 
 @dataclass
 class BenchmarkResult:
@@ -49,14 +51,7 @@ class BenchmarkResult:
 
 
 def load_analysis_module(path: str | Path) -> ModuleType:
-    """Load the processing script to benchmark without installing/copying it.
-
-    The temporary module must be registered in ``sys.modules`` *before*
-    execution.  Python 3.12's ``dataclasses`` implementation consults
-    ``sys.modules[cls.__module__]`` while resolving postponed annotations
-    (``from __future__ import annotations``).  Executing an unregistered module
-    therefore breaks as soon as the target script defines a ``@dataclass``.
-    """
+    """Load the processing script to benchmark without installing/copying it."""
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(path)
@@ -67,12 +62,12 @@ def load_analysis_module(path: str | Path) -> ModuleType:
         raise ImportError(f"Cannot import analysis module from {path}")
 
     module = importlib.util.module_from_spec(spec)
-    # Required for dataclasses + postponed annotations on Python 3.12.
+    # Python 3.12 dataclasses with postponed annotations require the module to
+    # already exist in sys.modules while the source file is executed.
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     except Exception:
-        # Do not leave a half-imported module behind if execution fails.
         sys.modules.pop(module_name, None)
         raise
 
@@ -120,10 +115,15 @@ def _candidate_interval(candidate: dict[str, Any]) -> tuple[float, float]:
     return mid - dur / 2.0, mid + dur / 2.0
 
 
-def _absolute_model_curve(curve: Any, candidate_time_s: float, file_duration_s: float) -> tuple[np.ndarray, np.ndarray]:
+def _absolute_model_curve(
+    curve: Any,
+    candidate_time_s: float,
+    file_duration_s: float,
+) -> tuple[np.ndarray, np.ndarray]:
     arr = np.asarray(curve, dtype=float)
     if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 2:
         raise ValueError("process_full_spectrum returned an invalid curve")
+
     # Extract_chunk_of_audio() uses a fixed 15 ms window centred on time_mid.
     chunk_start_s = max(0.0, candidate_time_s - 0.0075)
     chunk_start_s = min(chunk_start_s, file_duration_s)
@@ -142,13 +142,24 @@ def run_benchmark(
     max_center_error_ms: float = 4.0,
     verbose: bool = True,
 ) -> BenchmarkResult:
-    """Benchmark SNR-blob detection and curve modelling against manual annotations."""
+    """Benchmark detection and curve modelling against validated annotations.
+
+    Only records with status ``annotated`` or ``no_chirp`` are ground truth.
+    Records such as ``in_progress`` are deliberately excluded because partial
+    annotations must never affect benchmark scores.
+
+    ``no_chirp`` records are still processed by the detector: every candidate
+    found in such a WAV is therefore counted as a false positive.
+    """
     annotation_json = Path(annotation_json).expanduser().resolve()
     with annotation_json.open("r", encoding="utf-8") as f:
         annotation_data = json.load(f)
 
-    root = Path(wav_root or annotation_data.get("root", annotation_json.parent)).expanduser().resolve()
+    root = Path(
+        wav_root or annotation_data.get("root", annotation_json.parent)
+    ).expanduser().resolve()
     module = load_analysis_module(analysis_py)
+
     det_kwargs = dict(DEFAULT_DETECTOR_KWARGS)
     if detector_kwargs:
         det_kwargs.update(detector_kwargs)
@@ -157,26 +168,50 @@ def run_benchmark(
     chirp_rows: list[dict[str, Any]] = []
     detection_rows: list[dict[str, Any]] = []
 
-    total_ref = total_det = total_tp = total_model_ok = 0
-    files_data = annotation_data.get("files", {}) or {}
+    total_ref = 0
+    total_det = 0
+    total_tp = 0
+    total_model_ok = 0
 
+    files_data = annotation_data.get("files", {}) or {}
     benchmark_records = [
-        (rel, rec) for rel, rec in files_data.items()
-        if rec.get("chirps")
+        (rel, rec)
+        for rel, rec in files_data.items()
+        if rec.get("status") in VALID_BENCHMARK_STATUSES
     ]
+
     if not benchmark_records:
-        raise ValueError("No annotated chirps found in annotation JSON")
+        raise ValueError(
+            "No validated annotation records found. "
+            "Expected status 'annotated' or 'no_chirp'."
+        )
 
     for file_no, (relative_path, record) in enumerate(benchmark_records, start=1):
         wav_path = root / relative_path
+        status = record.get("status")
         refs = _manual_chirps(record)
-        if not refs:
+
+        # An annotated record should contain at least one complete chirp. Treat
+        # a malformed record as invalid ground truth rather than silently using
+        # it as a negative example.
+        if status == "annotated" and not refs:
+            if verbose:
+                print(
+                    f"[{file_no}/{len(benchmark_records)}] {relative_path} — "
+                    "SKIPPED: status=annotated but no complete chirp"
+                )
             continue
+
         if not wav_path.exists():
             raise FileNotFoundError(f"Annotated WAV not found: {wav_path}")
 
         if verbose:
-            print(f"[{file_no}/{len(benchmark_records)}] {relative_path} — {len(refs)} manual chirp(s)")
+            label = (
+                f"{len(refs)} manual chirp(s)"
+                if refs
+                else "no_chirp ground truth"
+            )
+            print(f"[{file_no}/{len(benchmark_records)}] {relative_path} — {label}")
 
         t0 = time.perf_counter()
         y, sr = _read_mono(wav_path)
@@ -187,7 +222,8 @@ def run_benchmark(
         ref_intervals = [r["interval_s"] for r in refs]
         det_intervals = [_candidate_interval(c) for c in candidates]
         matches, unmatched_refs, unmatched_dets = match_chirps(
-            ref_intervals, det_intervals,
+            ref_intervals,
+            det_intervals,
             min_iou=min_iou,
             max_center_error_ms=max_center_error_ms,
         )
@@ -198,6 +234,7 @@ def run_benchmark(
             interval = det_intervals[j]
             detection_rows.append({
                 "relative_path": relative_path,
+                "ground_truth_status": status,
                 "detected_index": j,
                 "matched": j in matched_det,
                 "time_mid_ms": float(cand["time_mid"]) * 1000.0,
@@ -211,9 +248,11 @@ def run_benchmark(
         model_ok_file = 0
         model_time_file = 0.0
         file_duration_s = len(y_filtered) / sr
+
         for i, ref in enumerate(refs):
             row: dict[str, Any] = {
                 "relative_path": relative_path,
+                "ground_truth_status": status,
                 "chirp_id": ref["chirp_id"],
                 "manual_start_ms": ref["t_ms"][0],
                 "manual_end_ms": ref["t_ms"][-1],
@@ -221,6 +260,7 @@ def run_benchmark(
                 "detected": i in match_by_ref,
                 "model_success": False,
             }
+
             if i not in match_by_ref:
                 row["failure_stage"] = "detection"
                 chirp_rows.append(row)
@@ -237,22 +277,32 @@ def run_benchmark(
 
             mt0 = time.perf_counter()
             try:
-                dur = float(np.clip(float(cand.get("duration", 0.005)), 0.005, 0.08))
+                dur = float(
+                    np.clip(float(cand.get("duration", 0.005)), 0.005, 0.08)
+                )
                 curve = module.process_full_spectrum(
-                    y_filtered, sr,
+                    y_filtered,
+                    sr,
                     time_mid=float(cand["time_mid"]),
                     duration=dur,
                 )
                 model_time = time.perf_counter() - mt0
                 model_time_file += model_time
                 row["model_time_s"] = model_time
+
                 if curve is None:
                     row["failure_stage"] = "modelling"
                     chirp_rows.append(row)
                     continue
 
-                pred_t, pred_f = _absolute_model_curve(curve, float(cand["time_mid"]), file_duration_s)
-                metrics = compare_curves(ref["t_ms"], ref["f_khz"], pred_t, pred_f)
+                pred_t, pred_f = _absolute_model_curve(
+                    curve,
+                    float(cand["time_mid"]),
+                    file_duration_s,
+                )
+                metrics = compare_curves(
+                    ref["t_ms"], ref["f_khz"], pred_t, pred_f
+                )
                 row.update(asdict(metrics))
                 row.update({
                     "model_success": True,
@@ -261,18 +311,28 @@ def run_benchmark(
                     "pred_end_ms": float(pred_t[-1]),
                 })
                 model_ok_file += 1
+
             except Exception as exc:
                 row["model_time_s"] = time.perf_counter() - mt0
                 row["failure_stage"] = "modelling_exception"
                 row["error"] = f"{type(exc).__name__}: {exc}"
+
             chirp_rows.append(row)
 
-        tp, fp, fn = len(matches), len(unmatched_dets), len(unmatched_refs)
+        tp = len(matches)
+        fp = len(unmatched_dets)
+        fn = len(unmatched_refs)
         precision = tp / (tp + fp) if tp + fp else 0.0
         recall = tp / (tp + fn) if tp + fn else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        f1 = (
+            2 * precision * recall / (precision + recall)
+            if precision + recall
+            else 0.0
+        )
+
         file_rows.append({
             "relative_path": relative_path,
+            "ground_truth_status": status,
             "manual_chirps": len(refs),
             "detections": len(candidates),
             "tp": tp,
@@ -283,10 +343,11 @@ def run_benchmark(
             "f1": f1,
             "model_success": model_ok_file,
             "model_success_rate_on_tp": model_ok_file / tp if tp else 0.0,
-            "end_to_end_recall": model_ok_file / len(refs) if refs else 0.0,
+            "end_to_end_recall": model_ok_file / len(refs) if refs else np.nan,
             "detection_time_s": detection_s,
             "model_time_s": model_time_file,
         })
+
         total_ref += len(refs)
         total_det += len(candidates)
         total_tp += tp
@@ -300,16 +361,30 @@ def run_benchmark(
     fn_total = total_ref - total_tp
     precision = total_tp / (total_tp + fp_total) if total_tp + fp_total else 0.0
     recall = total_tp / total_ref if total_ref else 0.0
-    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    modeled = chirps_df[chirps_df.get("model_success", False) == True] if not chirps_df.empty else chirps_df
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+
+    if not chirps_df.empty and "model_success" in chirps_df:
+        modeled = chirps_df[chirps_df["model_success"] == True]
+    else:
+        modeled = chirps_df
 
     def mean_col(name: str) -> float:
         if modeled.empty or name not in modeled:
             return float("nan")
         return float(pd.to_numeric(modeled[name], errors="coerce").mean())
 
+    no_chirp_files = 0
+    if not files_df.empty and "ground_truth_status" in files_df:
+        no_chirp_files = int((files_df["ground_truth_status"] == "no_chirp").sum())
+
     summary = {
         "wav_count": int(len(files_df)),
+        "annotated_wav_count": int(len(files_df) - no_chirp_files),
+        "no_chirp_wav_count": no_chirp_files,
         "manual_chirps": int(total_ref),
         "detections": int(total_det),
         "true_positives": int(total_tp),
@@ -319,12 +394,18 @@ def run_benchmark(
         "recall": float(recall),
         "f1": float(f1),
         "model_success": int(total_model_ok),
-        "model_success_rate_on_tp": float(total_model_ok / total_tp) if total_tp else 0.0,
-        "end_to_end_recall": float(total_model_ok / total_ref) if total_ref else 0.0,
-        "curve_mae_khz_mean": mean_col("mae_khz"),
+        "model_success_rate_on_tp": (
+            float(total_model_ok / total_tp) if total_tp else 0.0
+        ),
+        "end_to_end_recall": (
+            float(total_model_ok / total_ref) if total_ref else 0.0
+        ),
+        "curve_median_abs_error_khz_mean": mean_col("median_abs_error_khz"),
         "curve_rmse_khz_mean": mean_col("rmse_khz"),
         "curve_p95_khz_mean": mean_col("p95_abs_error_khz"),
         "curve_coverage_mean": mean_col("coverage"),
         "detector_kwargs": det_kwargs,
+        "ground_truth_statuses": sorted(VALID_BENCHMARK_STATUSES),
     }
+
     return BenchmarkResult(summary, files_df, chirps_df, detections_df)
