@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -48,15 +49,33 @@ class BenchmarkResult:
 
 
 def load_analysis_module(path: str | Path) -> ModuleType:
-    """Load the processing script to benchmark without installing/copying it."""
+    """Load the processing script to benchmark without installing/copying it.
+
+    The temporary module must be registered in ``sys.modules`` *before*
+    execution.  Python 3.12's ``dataclasses`` implementation consults
+    ``sys.modules[cls.__module__]`` while resolving postponed annotations
+    (``from __future__ import annotations``).  Executing an unregistered module
+    therefore breaks as soon as the target script defines a ``@dataclass``.
+    """
     path = Path(path).expanduser().resolve()
     if not path.exists():
         raise FileNotFoundError(path)
-    spec = importlib.util.spec_from_file_location("bfsp_benchmark_target", path)
+
+    module_name = "bfsp_benchmark_target"
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot import analysis module from {path}")
+
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # Required for dataclasses + postponed annotations on Python 3.12.
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        # Do not leave a half-imported module behind if execution fails.
+        sys.modules.pop(module_name, None)
+        raise
+
     required = ["high_pass_filter", "detect_candidates_snr_blobs", "process_full_spectrum"]
     missing = [name for name in required if not hasattr(module, name)]
     if missing:
