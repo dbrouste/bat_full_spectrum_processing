@@ -15,7 +15,7 @@ import pandas as pd
 import soundfile as sf
 
 from .curve_metrics import compare_curves
-from .matching import match_chirps
+from .matching import match_chirps, match_chirps_frequency_aware
 
 
 DEFAULT_DETECTOR_KWARGS = {
@@ -211,12 +211,28 @@ def run_benchmark(
 
         ref_intervals = [r["interval_s"] for r in refs]
         det_intervals = [_candidate_interval(c) for c in candidates]
-        matches, unmatched_refs, unmatched_dets = match_chirps(
-            ref_intervals,
-            det_intervals,
-            min_iou=min_iou,
-            max_center_error_ms=max_center_error_ms,
-        )
+        if matching_mode == "temporal":
+            matches, unmatched_refs, unmatched_dets = match_chirps(
+                ref_intervals,
+                det_intervals,
+                min_iou=min_iou,
+                max_center_error_ms=max_center_error_ms,
+            )
+        elif matching_mode == "frequency_aware":
+            matches, unmatched_refs, unmatched_dets = match_chirps_frequency_aware(
+                ref_intervals,
+                det_intervals,
+                [r["t_ms"] / 1000.0 for r in refs],
+                [r["f_khz"] for r in refs],
+                [float(c["time_mid"]) for c in candidates],
+                [float(c.get("peak_freq_hz", np.nan)) / 1000.0 for c in candidates],
+                min_iou=min_iou,
+                max_center_error_ms=max_center_error_ms,
+                frequency_scale_khz=frequency_scale_khz,
+                frequency_weight=frequency_weight,
+            )
+        else:
+            raise ValueError("matching_mode must be 'temporal' or 'frequency_aware'")
         match_by_ref = {m.reference_index: m for m in matches}
         matched_det = {m.detected_index for m in matches}
 
@@ -263,6 +279,7 @@ def run_benchmark(
                 "detected_index": m.detected_index,
                 "detection_iou": m.iou,
                 "detection_center_error_ms": m.center_error_ms,
+                "detection_frequency_error_khz": m.frequency_error_khz,
                 "candidate_time_mid_ms": float(cand["time_mid"]) * 1000.0,
                 "candidate_peak_freq_khz": float(cand.get("peak_freq_hz", np.nan)) / 1000.0,
                 "detector_branch": cand.get("detector_branch", "legacy"),
@@ -362,13 +379,32 @@ def run_benchmark(
         return float(pd.to_numeric(modeled[name], errors="coerce").mean())
 
     no_chirp_files = 0
+    no_chirp_fp_total = 0
+    no_chirp_files_with_fp = 0
+    no_chirp_true_negative_files = 0
+    positive_file_fp_total = 0
     if not files_df.empty and "ground_truth_status" in files_df:
-        no_chirp_files = int((files_df["ground_truth_status"] == "no_chirp").sum())
+        no_chirp_mask = files_df["ground_truth_status"] == "no_chirp"
+        no_chirp_files = int(no_chirp_mask.sum())
+        if no_chirp_files:
+            neg = files_df[no_chirp_mask]
+            no_chirp_fp_total = int(pd.to_numeric(neg["fp"], errors="coerce").fillna(0).sum())
+            no_chirp_files_with_fp = int((pd.to_numeric(neg["fp"], errors="coerce").fillna(0) > 0).sum())
+            no_chirp_true_negative_files = int((pd.to_numeric(neg["detections"], errors="coerce").fillna(0) == 0).sum())
+        pos = files_df[~no_chirp_mask]
+        if not pos.empty:
+            positive_file_fp_total = int(pd.to_numeric(pos["fp"], errors="coerce").fillna(0).sum())
 
     summary = {
         "wav_count": int(len(files_df)),
         "annotated_wav_count": int(len(files_df) - no_chirp_files),
         "no_chirp_wav_count": no_chirp_files,
+        "no_chirp_false_positives": no_chirp_fp_total,
+        "no_chirp_files_with_fp": no_chirp_files_with_fp,
+        "no_chirp_true_negative_files": no_chirp_true_negative_files,
+        "no_chirp_file_specificity": float(no_chirp_true_negative_files / no_chirp_files) if no_chirp_files else float("nan"),
+        "fp_per_no_chirp_file": float(no_chirp_fp_total / no_chirp_files) if no_chirp_files else float("nan"),
+        "positive_file_false_positives": positive_file_fp_total,
         "manual_chirps": int(total_ref),
         "detections": int(total_det),
         "true_positives": int(total_tp),
@@ -386,6 +422,9 @@ def run_benchmark(
         "curve_coverage_mean": mean_col("coverage"),
         "detector_kwargs": det_kwargs,
         "model_frequency_seeded": supports_seed_freq,
+        "matching_mode": matching_mode,
+        "frequency_scale_khz": float(frequency_scale_khz) if matching_mode == "frequency_aware" else None,
+        "frequency_weight": float(frequency_weight) if matching_mode == "frequency_aware" else None,
         "ground_truth_statuses": sorted(VALID_BENCHMARK_STATUSES),
     }
 
