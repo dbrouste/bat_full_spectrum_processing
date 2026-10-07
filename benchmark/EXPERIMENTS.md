@@ -327,3 +327,55 @@ Main commits:
 
 The benchmark runner now records `tracking_step_us` per matched chirp so
 runtime, coverage and curve error can be stratified by the chosen step.
+
+
+## Adaptive-step full modelling benchmark — 116 adaptive_v4 TP
+
+The adaptive tracking rule was run end-to-end on all 116 frequency-aware
+adaptive_v4 true-positive assignments.
+
+Result after guarding failed segmented Gaussian extension points:
+- model success: **116 / 116**
+- median runtime: **0.642 s / chirp**
+- median absolute frequency error: **0.423 kHz**
+- median RMSE: **0.652 kHz**
+- median P95 absolute error: **1.335 kHz**
+- median temporal coverage: **0.870**
+- median start error: **+0.230 ms**
+- median end error: **+0.078 ms**
+
+Frequency-band breakdown:
+
+| detector peak | n | model success | median error | median RMSE | median coverage |
+|---|---:|---:|---:|---:|---:|
+| <35 kHz | 39 | 39/39 | 0.181 kHz | 0.266 kHz | 1.000 |
+| 35-45 kHz | 12 | 12/12 | 0.438 kHz | 0.623 kHz | 0.808 |
+| 45-60 kHz | 57 | 57/57 | 0.600 kHz | 1.107 kHz | 0.785 |
+| >=60 kHz | 8 | 8/8 | 1.222 kHz | 1.985 kHz | 0.662 |
+
+Compared on the same 75 chirps that already succeeded in the earlier fixed-step
+experiment, curve accuracy is effectively unchanged (median error 0.581 -> 0.588
+kHz; median RMSE 0.982 -> 1.050 kHz). The key gain is recovery of all **41**
+previous modelling failures. Those recovered calls are mostly long,
+low-frequency calls and are modelled very accurately:
+- recovered-call median error: **0.185 kHz**
+- median RMSE: **0.317 kHz**
+- median P95 error: **0.606 kHz**
+- median coverage: **1.000**
+
+Two low-frequency calls initially raised
+`TypeError: cannot unpack non-iterable NoneType object` in
+`initial_call_trend_segmented()` when a Gaussian extension candidate had no
+valid corrected point. Main commit
+`f0b7c6e591a0650f11ee0008ed47c05192c1f979` now treats that extension candidate
+as invalid rather than aborting the chirp. Both calls then model successfully.
+
+Remaining quality outliers are no longer convergence failures:
+- 8/116 calls have median frequency error >2 kHz
+- 1/116 is >5 kHz
+- 11/116 have temporal coverage <0.5
+
+The largest concentration is in `20250615_185828.wav`, followed by
+`rec_20260103_201256.wav` and `rec_20260103_202314.wav`. These should be
+treated as ridge-assignment/extension-quality problems, not detector or
+convergence problems.
