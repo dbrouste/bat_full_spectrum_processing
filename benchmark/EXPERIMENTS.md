@@ -402,3 +402,50 @@ was promoted to the canonical modeller.
 The next candidate is a coarse time-frequency ridge derived from the detector
 blob itself, used only to initialize orientation and frequency band before the
 existing Gaussian ridge refinement.
+
+
+## Coarse detector-ridge seed experiment — broad FM calls
+
+A coarse ridge initializer was tested to address cases where the detector's
+single maximum-energy frequency lies on the low-frequency tail of a much wider
+FM sweep.
+
+Method:
+- within each connected detector blob, keep the strongest in-blob frequency in
+  each time column;
+- median-filter that path over three columns;
+- search short windows of 3 to 12 columns for the most coherent downward
+  linear segment;
+- retain its midpoint frequency and slope only as an initializer for the
+  existing Gaussian ridge tracker.
+
+To avoid changing ordinary calls, the coarse seed is activated only when:
+- blob width >= 8 ms,
+- blob frequency height >= 20 kHz,
+- detector peak lies in the lowest 15% of the blob frequency bbox.
+
+On the current 116 matched adaptive_v4 TP this condition selects only 3 calls.
+
+Selective coarse frequency+slope seeding results:
+- 20241026_233729 chirp 2: median error 0.616 -> 0.654 kHz, coverage 0.780 -> 0.781
+- 20250615_185828 chirp 5: median error 0.875 -> 0.899 kHz, coverage 0.679 -> 0.552
+- 20250615_185828 chirp 11: median error 7.680 -> **1.174 kHz**, coverage 1.000 -> **0.672**
+
+Aggregate over all 116 calls:
+- median frequency error remains 0.423 kHz
+- median RMSE remains 0.652 kHz
+- calls above 2 kHz error: 8 -> **7**
+- calls above 5 kHz error: 1 -> **0**
+- calls with coverage below 0.5 remain **11**
+- median runtime remains ~0.63 s/chirp
+
+Interpretation:
+the coarse ridge successfully fixes the single catastrophic broad-FM
+mis-initialization without materially changing the global error distribution.
+The small coverage loss on one already-good trigger means this should remain a
+narrow fallback, not a replacement initializer for all chirps.
+
+Implementation:
+- main detection extracts coarse ridge seed metadata;
+- main modelling accepts broad-FM seed frequency and slope;
+- benchmark passes and records those values when the detector activates them.
