@@ -2085,8 +2085,8 @@ def process_spectrum_segmented(y_use, sr, time_mid, duration):
   #print('Max_Gauss_coordinate')
   #print(Max_Gauss_coordinate)
   curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
-  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
-  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all)
+  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all)
 
 
   plot_spectrogram_with_points2(y_chun, sr, curve_segmented)
