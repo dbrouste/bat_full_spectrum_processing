@@ -2116,7 +2116,10 @@ def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
 
     return results
 
-def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value, tracking_step_us=40.0):
+def extend_trend_left(
+    y_chun, sr, curve_all, S, freqs, times, max_value,
+    tracking_step_us=40.0, diagnostics=None, diagnostic_prefix="extend_left",
+):
     if curve_all is None:
         return None
 
@@ -2125,13 +2128,26 @@ def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value, trackin
     #print('001')
     curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
     #print('002')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+    curve_segmented = process_side(
+        curve_segmented, S, freqs, times, sr, LeftRight=0,
+        max_amplitude=max_value, Previous_Curve=curve_all,
+        tracking_step_us=tracking_step_us, diagnostics=diagnostics,
+        diagnostic_label=f"{diagnostic_prefix}_left",
+    )
     #print('003')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+    curve_segmented = process_side(
+        curve_segmented, S, freqs, times, sr, LeftRight=1,
+        max_amplitude=max_value, Previous_Curve=curve_all,
+        tracking_step_us=tracking_step_us, diagnostics=diagnostics,
+        diagnostic_label=f"{diagnostic_prefix}_right",
+    )
     #print('004')
     return curve_segmented
 
-def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value, tracking_step_us=40.0):
+def extend_trend_right(
+    y_chun, sr, curve_all, S, freqs, times, max_value,
+    tracking_step_us=40.0, diagnostics=None, diagnostic_prefix="extend_right",
+):
     if curve_all is None:
         return None
 
@@ -2139,9 +2155,19 @@ def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value, tracki
 
     curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
 
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+    curve_segmented = process_side(
+        curve_segmented, S, freqs, times, sr, LeftRight=0,
+        max_amplitude=max_value, Previous_Curve=curve_all,
+        tracking_step_us=tracking_step_us, diagnostics=diagnostics,
+        diagnostic_label=f"{diagnostic_prefix}_left",
+    )
 
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+    curve_segmented = process_side(
+        curve_segmented, S, freqs, times, sr, LeftRight=1,
+        max_amplitude=max_value, Previous_Curve=curve_all,
+        tracking_step_us=tracking_step_us, diagnostics=diagnostics,
+        diagnostic_label=f"{diagnostic_prefix}_right",
+    )
 
     return curve_segmented
 
