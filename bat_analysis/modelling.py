@@ -36,6 +36,7 @@ def _initial_call_trend_seeded(
     *,
     seed_half_band_hz: float = 8000.0,
     step_ns: float = 50.0,
+    seed_slope_hz_per_ms: float | None = None,
 ):
     """Build the legacy seven-point initial trend near a detector frequency.
 
@@ -68,20 +69,36 @@ def _initial_call_trend_seeded(
 
     step = float(step_ns) / 1_000_000.0
     candidate_times = max_time + np.asarray([-3, -2, -1, 0, 1, 2, 3], dtype=float) * step
+
+    sample_slope = 1.0
     candidate_freqs = np.full_like(candidate_times, max_freq)
+    if (
+        seed_slope_hz_per_ms is not None
+        and np.isfinite(seed_slope_hz_per_ms)
+        and abs(float(seed_slope_hz_per_ms)) > 100.0
+    ):
+        chirp_slope_normalized = (
+            float(seed_slope_hz_per_ms) * 1000.0 / 3730000.0
+        )
+        if abs(chirp_slope_normalized) > 1e-9:
+            sample_slope = -1.0 / chirp_slope_normalized
+            candidate_freqs = max_freq + (
+                candidate_times - max_time
+            ) * float(seed_slope_hz_per_ms) * 1000.0
+
     results = np.zeros((len(candidate_times), 9), dtype=float)
 
     for i, (candidate_time, candidate_freq) in enumerate(zip(candidate_times, candidate_freqs)):
         candidate_point = (float(candidate_freq), float(candidate_time))
         try:
             t_line, amplitude_line = base.sample_line_from_max_amp_dynamic(
-                sp, freqs, times, candidate_point, sr
+                sp, freqs, times, candidate_point, sr, slope=sample_slope
             )
             variation, max_gauss_z, max_dist, popt, _ = base.calculate_percentage_variation(
-                t_line, amplitude_line, slope=1
+                t_line, amplitude_line, slope=sample_slope
             )
             max_gauss_freq, max_gauss_time = base.point_along_line(
-                candidate_point, 1, max_dist
+                candidate_point, sample_slope, max_dist
             )
             if (
                 popt is not None
@@ -103,7 +120,7 @@ def _initial_call_trend_seeded(
                     popt[0],
                     popt[1],
                     popt[2],
-                    1,
+                    sample_slope,
                 ]
         except Exception:
             # Preserve the legacy convention: an invalid candidate remains a
@@ -152,6 +169,7 @@ def process_full_spectrum(
     duration,
     seed_freq_hz: float | None = None,
     broad_fm_seed_freq_hz: float | None = None,
+    broad_fm_seed_slope_hz_per_ms: float | None = None,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -173,7 +191,16 @@ def process_full_spectrum(
         curve_all = base.initial_call_trend(y_chun, sr, duration)
     else:
         curve_all = _initial_call_trend_seeded(
-            y_chun, sr, duration, float(effective_seed_freq_hz)
+            y_chun,
+            sr,
+            duration,
+            float(effective_seed_freq_hz),
+            seed_slope_hz_per_ms=(
+                broad_fm_seed_slope_hz_per_ms
+                if broad_fm_seed_freq_hz is not None
+                and np.isfinite(broad_fm_seed_freq_hz)
+                else None
+            ),
         )
     if curve_all is None or len(curve_all) == 0:
         return None
