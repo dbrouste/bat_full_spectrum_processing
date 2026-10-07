@@ -332,8 +332,30 @@ def run_benchmark(
                         step_fn(dur, seed if np.isfinite(seed) else None)
                     )
 
+                model_diagnostics = {}
+                if "diagnostics" in inspect.signature(module.process_full_spectrum).parameters:
+                    model_kwargs["diagnostics"] = model_diagnostics
+
                 curve = module.process_full_spectrum(y_filtered, sr, **model_kwargs)
                 model_time = time.perf_counter() - mt0
+
+                if model_diagnostics:
+                    side_events = model_diagnostics.get("side_events", [])
+                    row["ridge_side_event_count"] = int(len(side_events))
+                    row["ridge_total_iterations"] = int(
+                        sum(int(e.get("iterations", 0)) for e in side_events)
+                    )
+                    row["ridge_max_side_iterations"] = int(
+                        max([int(e.get("iterations", 0)) for e in side_events] or [0])
+                    )
+                    row["ridge_stop_reasons"] = "|".join(
+                        f"{e.get('label', '')}:{e.get('stop_reason', '')}"
+                        for e in side_events
+                    )
+                    row["ridge_stop_reason_counts"] = json.dumps(
+                        model_diagnostics.get("stop_reason_counts", {}),
+                        sort_keys=True,
+                    )
                 model_time_file += model_time
                 row["model_time_s"] = model_time
 
