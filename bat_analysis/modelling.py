@@ -170,6 +170,7 @@ def process_full_spectrum(
     seed_freq_hz: float | None = None,
     broad_fm_seed_freq_hz: float | None = None,
     broad_fm_seed_slope_hz_per_ms: float | None = None,
+    diagnostics: dict | None = None,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -181,11 +182,43 @@ def process_full_spectrum(
     """
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
 
+    if diagnostics is not None:
+        diagnostics.clear()
+        diagnostics.update({
+            "side_events": [],
+            "extension_events": [],
+            "input_time_mid_s": float(time_mid),
+            "input_duration_s": float(duration),
+            "seed_freq_hz": (
+                float(seed_freq_hz)
+                if seed_freq_hz is not None and np.isfinite(seed_freq_hz)
+                else None
+            ),
+            "broad_fm_seed_freq_hz": (
+                float(broad_fm_seed_freq_hz)
+                if broad_fm_seed_freq_hz is not None and np.isfinite(broad_fm_seed_freq_hz)
+                else None
+            ),
+            "broad_fm_seed_slope_hz_per_ms": (
+                float(broad_fm_seed_slope_hz_per_ms)
+                if broad_fm_seed_slope_hz_per_ms is not None
+                and np.isfinite(broad_fm_seed_slope_hz_per_ms)
+                else None
+            ),
+        })
+
     effective_seed_freq_hz = seed_freq_hz
     if broad_fm_seed_freq_hz is not None and np.isfinite(broad_fm_seed_freq_hz):
         effective_seed_freq_hz = float(broad_fm_seed_freq_hz)
 
     tracking_step_us = _adaptive_tracking_step_us(duration, effective_seed_freq_hz)
+    if diagnostics is not None:
+        diagnostics["effective_seed_freq_hz"] = (
+            float(effective_seed_freq_hz)
+            if effective_seed_freq_hz is not None and np.isfinite(effective_seed_freq_hz)
+            else None
+        )
+        diagnostics["tracking_step_us"] = float(tracking_step_us)
 
     if effective_seed_freq_hz is None or not np.isfinite(effective_seed_freq_hz):
         curve_all = base.initial_call_trend(y_chun, sr, duration)
@@ -213,21 +246,27 @@ def process_full_spectrum(
 
     curve_all = base.process_side(
         curve_all, s, freqs, times, sr, LeftRight=0, max_amplitude=max_value,
-        tracking_step_us=tracking_step_us
+        tracking_step_us=tracking_step_us,
+        diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+        diagnostic_label="initial_left",
     )
     if curve_all is None:
         return None
 
     curve_all = base.process_side(
         curve_all, s, freqs, times, sr, LeftRight=1, max_amplitude=max_value,
-        tracking_step_us=tracking_step_us
+        tracking_step_us=tracking_step_us,
+        diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+        diagnostic_label="initial_right",
     )
     if curve_all is None:
         return None
 
     curve_segmented = base.extend_trend_left(
         y_chun, sr, curve_all, s, freqs, times, max_value,
-        tracking_step_us=tracking_step_us
+        tracking_step_us=tracking_step_us,
+        diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+        diagnostic_prefix="extend_left_0",
     )
     if curve_segmented is not None:
         max_segment = max(entry[2] for entry in curve_segmented)
@@ -239,7 +278,9 @@ def process_full_spectrum(
             curve_all = base.concatenate_trends(curve_segmented, curve_all)
             curve_segmented = base.extend_trend_left(
                 y_chun, sr, curve_all, s, freqs, times, max_value,
-                tracking_step_us=tracking_step_us
+                tracking_step_us=tracking_step_us,
+                diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+                diagnostic_prefix=f"extend_left_{len(diagnostics['extension_events']) + 1 if diagnostics is not None else 1}",
             )
             if curve_segmented is None:
                 break
@@ -247,7 +288,9 @@ def process_full_spectrum(
 
     curve_segmented = base.extend_trend_right(
         y_chun, sr, curve_all, s, freqs, times, max_value,
-        tracking_step_us=tracking_step_us
+        tracking_step_us=tracking_step_us,
+        diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+        diagnostic_prefix="extend_right_0",
     )
     if curve_segmented is not None:
         max_segment = max(entry[2] for entry in curve_segmented)
@@ -261,7 +304,9 @@ def process_full_spectrum(
             curve_all = base.concatenate_trends(curve_all, curve_segmented)
             curve_segmented = base.extend_trend_right(
                 y_chun, sr, curve_all, s, freqs, times, max_value,
-                tracking_step_us=tracking_step_us
+                tracking_step_us=tracking_step_us,
+                diagnostics=(diagnostics["side_events"] if diagnostics is not None else None),
+                diagnostic_prefix=f"extend_right_{len(diagnostics['extension_events']) + 1 if diagnostics is not None else 1}",
             )
             if curve_segmented is None:
                 break
@@ -270,6 +315,19 @@ def process_full_spectrum(
     curve_all = base.interpolate_trend_results(curve_all)
     curve_all = base.fit_spline_with_smoothness(curve_all)
     curve_all = base.sample_curve_equally(curve_all)
+
+    if diagnostics is not None:
+        diagnostics["model_success"] = curve_all is not None
+        diagnostics["final_points"] = int(len(curve_all)) if curve_all is not None else 0
+        reasons = [
+            event.get("stop_reason")
+            for event in diagnostics.get("side_events", [])
+            if event.get("stop_reason")
+        ]
+        diagnostics["stop_reason_counts"] = {
+            reason: int(reasons.count(reason)) for reason in sorted(set(reasons))
+        }
+
     return curve_all
 
 
