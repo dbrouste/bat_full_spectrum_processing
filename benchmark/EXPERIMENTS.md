@@ -242,3 +242,63 @@ Compared with adaptive_v3 on the full 61-WAV dataset:
 The improvement reproduces on the grouped hold-out, so it is unlikely to be
 only an in-sample threshold effect. adaptive_v4 remains opt-in until the
 modelling/ridge stage is revalidated end-to-end.
+
+
+## Modelling runtime/convergence diagnostics — 2026-10-07
+
+The larger dataset exposed a second bottleneck after detection: ridge modelling can
+be pathologically slow on some calls, especially long shallow low-frequency
+chirps.
+
+Observed hotspots:
+- `sample_line_from_max_amp_dynamic()` repeatedly constructs/interrogates a
+  spline interpolator during tracking.
+- `fit_gaussian()` uses unconstrained `curve_fit` and can spend a long time
+  on difficult amplitude profiles.
+- `process_side()` advances with a fixed nominal 40-us tracking step. Long,
+  shallow calls can therefore require hundreds of iterations per side.
+- segmented extension can repeat the same expensive machinery several times.
+
+A concrete bug was fixed on main in commit
+`ba45810e5ab36b7ccd365153f51a8aefe8d19dcb`:
+the first negative-direction sampling step was not normalized by slope, unlike
+the positive direction. Sampling is also stopped outside the spectrogram bounds,
+and stalled side tracking now has tighter guards.
+
+A more aggressive local experiment combined:
+- shared spectrogram interpolator,
+- bounded Gaussian fit,
+- side iteration cap,
+- larger tracking step.
+
+This made successful calls fast (typically a few tenths of a second), but a hard
+iteration cap of 120 reduced model completeness. On 116 adaptive_v4 matched TP,
+75 completed and 41 returned no curve. Failures were strongly concentrated at
+low frequency:
+- candidate peak <35 kHz: 31 failures / 39 matched calls,
+- 35-45 kHz: 3 failures / 12,
+- 45-60 kHz: 7 failures / 57,
+- >=60 kHz: 0 failures / 8.
+
+For the 75 completed curves in that experiment:
+- median frequency error median: ~0.58 kHz,
+- RMSE median: ~0.98 kHz,
+- P95 error median: ~1.81 kHz,
+- coverage median: ~0.68.
+
+The low-frequency failures are mainly long, shallow calls. Their median manual
+duration is much longer than successful calls, and side-level diagnostics show
+the convergence failure is usually in `process_side()` itself.
+
+A targeted step-size experiment is promising: with the same 120-iteration
+diagnostic cap, increasing the default tracking step from 40 to 60 (nominal
+microseconds; historical variable name says ns) raised side-level convergence
+from 75/116 to 107/116. The remaining 9 side failures were all below 35 kHz.
+
+Conclusion:
+- do not simply lower thresholds or raise the iteration limit;
+- make tracking step adaptive to call duration/slope;
+- keep Gaussian fitting bounded;
+- reuse one interpolator per chirp;
+- retain a hard runtime/iteration guard;
+- validate each change against curve error and coverage, not only model success.
