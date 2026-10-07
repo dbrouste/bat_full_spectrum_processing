@@ -1,21 +1,49 @@
 # Bat Full Spectrum Processing
 
-Python tools for full-spectrum bat call processing, annotation, modelling, feature extraction, and benchmarking.
+Python tools for full-spectrum bat-call processing, manual annotation, chirp detection, ridge reconstruction/modelling, diagnostics, and benchmarking.
 
-## Architecture
+The project is currently being developed around a manually annotated ground-truth dataset so that detector and curve-reconstruction changes can be evaluated objectively.
+
+## Current status
+
+Implemented and actively used:
+
+- interactive manual chirp annotation on WAV spectrograms;
+- recursive WAV discovery and resumable JSON annotation storage;
+- Plotly/Dash spectrogram navigation with zoom/pan;
+- PCHIP interpolation through manually selected chirp points;
+- optional +45° spectrogram snap when placing points;
+- SNR/blob chirp detection with several detector generations;
+- time/frequency non-maximum suppression and duplicate filtering;
+- detector-informed ridge initialization;
+- adaptive ridge-tracking step for longer / lower-frequency calls;
+- structured processing diagnostics for rejected or truncated curves;
+- detection and curve benchmark metrics.
+
+Still under development:
+
+- final ridge API;
+- higher-level feature extraction;
+- final chirp-shape modelling / parameterization;
+- complete automated benchmark workflow.
+
+## Repository structure
 
 ```text
 bat_analysis/
-    detection.py
-    ridge.py
-    modelling.py
-    features.py
-    spectrogram.py
+    bfsp_clean_patched.py       # current patched legacy processing core
+    detection.py                # chirp detector API + adaptive detector versions
+    modelling.py                # detector-seeded ridge reconstruction
+    processing_diagnostics.py   # structured failure/stop diagnostics
+    spectrogram.py              # WAV reading and spectrogram generation
+    ridge.py                    # future ridge API
+    features.py                 # future feature extraction API
 
 annotation/
-    app.py
-    snap.py
-    storage.py
+    app.py                      # Dash/Plotly manual annotator
+    snap.py                     # +45° display-space snap
+    storage.py                  # resumable JSON annotation storage
+    __init__.py
 
 benchmark/
     detection_metrics.py
@@ -25,15 +53,27 @@ notebooks/
     annotation.ipynb
 ```
 
-The current development focus is the manual annotation tool used to build a ground-truth dataset for chirp detection and curve reconstruction.
+## Installation
 
-## Install
+Clone the repository and install the main dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Run from Jupyter
+The current legacy/modelling pipeline also imports `librosa`. If it is not already installed in your environment:
+
+```bash
+pip install librosa
+```
+
+## Manual annotation tool
+
+The annotator is currently the main tool used to build the ground-truth dataset.
+
+### Launch from Jupyter
+
+From the repository root:
 
 ```python
 %load_ext autoreload
@@ -54,15 +94,173 @@ app = run_annotator(
 )
 ```
 
-The WAV folder is searched recursively. Files are presented in a deterministic random order. Annotation state is saved after every edit so sessions can be resumed.
+The WAV folder is searched recursively.
 
-### Annotation workflow
+Files are presented in a deterministic shuffled order. Already annotated files are kept in the queue, but unprocessed files are presented first. Annotation state is written to JSON so a session can be stopped and resumed.
+
+### Annotation controls
+
+The spectrogram is interactive. Use the Plotly toolbar or mouse wheel to zoom and pan.
+
+Typical workflow:
 
 1. Click **New chirp**.
 2. Click the chirp start point and end point.
-3. A PCHIP curve is displayed between the points.
-4. Use **Add point** only where the PCHIP curve departs from the visible ridge.
-5. Optional **Snap +45°** moves a click to the strongest spectrogram value along a +45° screen-space line.
-6. Click **Finish chirp**.
-7. Add more chirps if necessary, then **Validate & next**.
-8. Use **No chirp** for true negative files and **Ignore / unusable** for files that should not enter the benchmark.
+3. A PCHIP curve is drawn between the selected points.
+4. Use **Add point** where the PCHIP curve does not follow the visible ridge.
+5. Use **Move point**, **Delete point**, or **Undo** when needed.
+6. Optional **Snap +45°** moves a click toward the strongest spectrogram value along a +45° line in display coordinates.
+7. Click **Finish chirp**.
+8. Add other chirps present in the WAV if necessary.
+9. Click **Validate & next**.
+10. Use **No chirp** for a true negative WAV.
+11. Use **Ignore / unusable** for files that should not enter the benchmark.
+
+The lower dB display limit can be adjusted interactively with the **dB floor** field.
+
+## Spectrograms
+
+Spectrogram generation is exposed through:
+
+```python
+from bat_analysis import compute_spectrogram
+```
+
+The annotation application currently uses this shared implementation, so the spectrogram shown during manual annotation is generated by the same project code used elsewhere.
+
+## Chirp detection
+
+The public detector is:
+
+```python
+from bat_analysis.detection import detect_chirps
+```
+
+It returns a list of `Detection` objects containing:
+
+- `t_start_ms`
+- `t_end_ms`
+- `peak_time_ms`
+- `peak_freq_khz`
+- `score`
+
+Example:
+
+```python
+import soundfile as sf
+from bat_analysis.detection import detect_chirps
+
+y, sr = sf.read("recording.wav")
+
+detections = detect_chirps(
+    y,
+    sr,
+    slope_filter_mode="adaptive_v4",
+)
+
+for d in detections:
+    print(d)
+```
+
+### Detector modes
+
+`detection.py` currently exposes several generations so changes can be benchmarked against previous behaviour:
+
+- **legacy** — historical SNR/blob detector;
+- **adaptive_lowfreq** — legacy-compatible detector with an additional shallow low-frequency branch;
+- **adaptive_v2** — general + low-frequency branches with time/frequency NMS;
+- **adaptive_v3** — v2 plus a high-frequency recovery branch and bounding-box duplicate filtering;
+- **adaptive_v4** — current conservative refinement developed after freezing a grouped development/hold-out split.
+
+The older modes are intentionally retained to make regression testing possible.
+
+## Ridge reconstruction / chirp modelling
+
+The current modelling entry point is:
+
+```python
+from bat_analysis.modelling import process_full_spectrum
+```
+
+Compared with the historical implementation, the current pipeline can use detector information to initialize the ridge near the detected frequency instead of always starting from the globally strongest spectral component.
+
+This is particularly useful when fundamentals, harmonics, or simultaneous calls are present.
+
+The modelling code also uses an adaptive tracking step bounded between 40 and 60 microseconds. Longer and low-frequency calls can therefore be followed with fewer iterations while short/steep calls keep the finer historical step.
+
+Example using a detector candidate:
+
+```python
+from bat_analysis.detection import detect_candidates_snr_blobs
+from bat_analysis.modelling import process_full_spectrum
+
+candidates = detect_candidates_snr_blobs(
+    y,
+    sr,
+    slope_filter_mode="adaptive_v4",
+)
+
+candidate = candidates[0]
+
+diagnostics = {}
+
+curve = process_full_spectrum(
+    y,
+    sr,
+    time_mid=candidate["time_mid"],
+    duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    broad_fm_seed_freq_hz=candidate.get("broad_fm_seed_freq_hz"),
+    broad_fm_seed_slope_hz_per_ms=candidate.get("coarse_seed_slope_hz_per_ms"),
+    diagnostics=diagnostics,
+)
+```
+
+## Processing diagnostics
+
+`bat_analysis/processing_diagnostics.py` is used to understand why a detected chirp fails during curve reconstruction.
+
+Diagnostics include structured stop/failure reasons such as:
+
+- failed initial extrapolation;
+- Gaussian fit / offset limits;
+- insufficient amplitude;
+- excessive frequency correction;
+- excessive trend angle;
+- lack of monotonic time progress;
+- maximum-iteration guard;
+- chunk boundaries.
+
+The goal is to make algorithm changes measurable instead of adjusting thresholds from visual inspection alone.
+
+## Benchmarking
+
+The `benchmark/` package currently contains metrics for two separate questions:
+
+1. **Detection** — was the chirp detected at the correct time?
+2. **Curve reconstruction** — how closely does the reconstructed frequency/time curve match the manual annotation?
+
+Keeping these stages separate makes it possible to distinguish detector errors from ridge/modelling errors.
+
+## Ground-truth strategy
+
+Manual annotations are intentionally sparse:
+
+- mark the start and end of a chirp;
+- add only enough intermediate points for the PCHIP curve to follow the visible ridge;
+- annotate multiple chirps independently when several calls are present.
+
+The resulting dataset is intended to support:
+
+- detector precision/recall evaluation;
+- temporal localization error;
+- frequency localization error;
+- ridge reconstruction error;
+- regression testing between algorithm versions;
+- later chirp-shape modelling and clustering.
+
+## Development principle
+
+Changes to detection or modelling should be benchmarked against the manually annotated dataset before replacing the previous implementation.
+
+The legacy and intermediate detector modes are therefore kept in the repository as explicit comparison baselines.
