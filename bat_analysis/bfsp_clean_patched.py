@@ -2030,8 +2030,14 @@ def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
         # Compute Gaussian fit metrics
         percent_variation, max_gauss_z, max_dist_gauss, popt, Freq_from_max_gauss = calculate_percentage_variation(t_line, amplitude_line, slope = 1)
 
-        # Compute the adjusted coordinates using the max distance along the line
-        max_gauss_freq, max_gauss_time  = point_along_line(candidate_point, 1, max_dist_gauss)
+        # Compute the adjusted coordinates using the max distance along the line.
+        # Difficult low-frequency extension profiles can legitimately fail the
+        # Gaussian fit; point_along_line then returns None. Treat this candidate
+        # as invalid instead of aborting the whole chirp.
+        adjusted_point = point_along_line(candidate_point, 1, max_dist_gauss)
+        if adjusted_point is None:
+            continue
+        max_gauss_freq, max_gauss_time = adjusted_point
 
         # Store results in the array
         if popt is not None and len(popt) >= 3 and None not in (max_gauss_time, max_gauss_freq, max_gauss_z, percent_variation, max_dist_gauss):
