@@ -1697,7 +1697,19 @@ def smooth_trend_spline2(trend_results, smoothing_factor=1):
 
     return spline_func, times_smooth, freqs_smooth
 
-def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitude, Previous_Curve=None,\n                 max_iterations=250, min_time_progress=1e-7):
+def process_side(
+    Seven_points,
+    Spectro,
+    freqs,
+    times,
+    sr,
+    LeftRight,
+    max_amplitude,
+    Previous_Curve=None,
+    max_iterations=250,
+    min_time_progress=1e-7,
+    tracking_step_us=40.0,
+):
     """
     Processes one side (Left or Right) for Gaussian variation analysis.
 
