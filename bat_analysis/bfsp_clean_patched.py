@@ -1709,6 +1709,8 @@ def process_side(
     max_iterations=250,
     min_time_progress=1e-7,
     tracking_step_us=40.0,
+    diagnostics=None,
+    diagnostic_label=None,
 ):
     """
     Processes one side (Left or Right) for Gaussian variation analysis.
@@ -1726,7 +1728,28 @@ def process_side(
     - Updated Seven_points after adding new points.
     """
 
+    diag = None
+    if diagnostics is not None:
+        diag = {
+            "label": diagnostic_label or ("left" if LeftRight == 0 else "right"),
+            "side": "left" if LeftRight == 0 else "right",
+            "tracking_step_us": float(tracking_step_us),
+            "initial_points": int(len(Seven_points)) if Seven_points is not None else 0,
+            "iterations": 0,
+            "stop_reason": None,
+        }
+        diagnostics.append(diag)
+
+    def _record_stop(reason, iterations=0, points=None):
+        if diag is not None:
+            diag["stop_reason"] = str(reason)
+            diag["iterations"] = int(iterations)
+            if points is not None:
+                diag["final_points"] = int(len(points))
+        return points
+
     if Seven_points is None:
+        _record_stop("input_none")
         return None
 
     # Determine min and max x-coordinates from Previous_Curve
@@ -1742,6 +1765,7 @@ def process_side(
     )
 
     if NewPointExtrapolated is None:
+        _record_stop("initial_extrapolation_failed")
         return None
 
     t_line3, amplitude_line3 = sample_line_from_max_amp_dynamic(
@@ -1749,12 +1773,14 @@ def process_side(
     )
 
     if t_line3 is None:
+        _record_stop("initial_sampling_failed")
         return None
 
 
     #pdb.set_trace()
 
     if t_line3.size < 10:
+        _record_stop("initial_sample_too_short", points=Seven_points)
         return Seven_points
 
     # Compute Gaussian variation metrics
@@ -1766,6 +1792,7 @@ def process_side(
     #pdb.set_trace()
 
     i, AngleOfTrend = 0, 0
+    forced_stop_reason = None
     previous_Max_Gauss_coordinate = None  # Track previous Gaussian max coordinate
 
     Max_Gauss_coordinate = point_along_line(NewPointExtrapolated, NewPointExtrapolatedSlope, Distance_from_max_gauss)
@@ -1802,6 +1829,7 @@ def process_side(
         Max_Gauss_coordinate = point_along_line(NewPointExtrapolated, NewPointExtrapolatedSlope, Distance_from_max_gauss)
 
         if Max_Gauss_coordinate is None:
+            forced_stop_reason = "invalid_gaussian_point"
             break
 
         Gauss_y_value, Gauss_x_value = Max_Gauss_coordinate
@@ -1816,6 +1844,7 @@ def process_side(
             else Gauss_x_value > edge_x + min_time_progress
         )
         if not made_progress:
+            forced_stop_reason = "no_time_progress"
             break
 
         #Add the new point to the trend
@@ -1830,6 +1859,7 @@ def process_side(
         )
 
         if NewPointExtrapolated is None or NewPointExtrapolatedSlope is None:
+            forced_stop_reason = "extrapolation_failed"
             break
 
         #Sample amplitude at this new point
@@ -1838,6 +1868,7 @@ def process_side(
         )
 
         if t_line3 is None or amplitude_line3 is None or t_line3.size < 10:
+            forced_stop_reason = "sample_too_short"
             break
 
         #Get data on amplitude sample at this new point
@@ -1889,9 +1920,46 @@ def process_side(
     # if (LeftRight == 0 and Gauss_x_value > limit_Gauss_x_value + 0.00002) or (LeftRight == 1 and Gauss_x_value < limit_Gauss_x_value - 0.00002):
     #     print('Gauss_x_value < or > limit_Gauss_x_value')
 
-    # Reaching the guard means that this side did not converge.  Do not let a
-    # partial curve be mistaken for a successfully analysed chirp: propagate
-    # failure to process_full_spectrum(), which will discard this chirp.
+    if forced_stop_reason is None:
+        if Gaussian_variation_percent >= 30:
+            forced_stop_reason = "gaussian_variation"
+        elif abs(Distance_from_max_gauss) >= 0.00069:
+            forced_stop_reason = "gaussian_offset"
+        elif Gauss_z_value <= max_amplitude / 20:
+            forced_stop_reason = "low_amplitude"
+        elif i >= max_iterations:
+            forced_stop_reason = "max_iterations"
+        elif abs(Freq_from_max_gauss) >= 1300:
+            forced_stop_reason = "gaussian_frequency_offset"
+        elif AngleOfTrend >= 50:
+            forced_stop_reason = "trend_angle"
+        elif previous_Max_Gauss_coordinate is not None and Max_Gauss_coordinate == previous_Max_Gauss_coordinate and i >= 2:
+            forced_stop_reason = "duplicate_gaussian_point"
+        elif not ((LeftRight == 0 and Gauss_x_value < min_previous_x) or (LeftRight == 1 and Gauss_x_value > max_previous_x)):
+            forced_stop_reason = "previous_curve_overlap"
+        elif not ((LeftRight == 0 and Gauss_x_value <= limit_Gauss_x_value + 0.00002) or
+                 (LeftRight == 1 and Gauss_x_value >= limit_Gauss_x_value - 0.00002)):
+            forced_stop_reason = "direction_limit"
+        elif not (Gauss_x_value > 0 and Gauss_x_value < 0.015):
+            forced_stop_reason = "time_window_boundary"
+        else:
+            forced_stop_reason = "condition_stop"
+
+    if diag is not None:
+        diag.update({
+            "iterations": int(i),
+            "final_points": int(len(Seven_points)),
+            "gaussian_variation_percent": float(Gaussian_variation_percent),
+            "gaussian_offset_s": float(Distance_from_max_gauss),
+            "gaussian_peak": float(Gauss_z_value),
+            "frequency_offset_hz": float(Freq_from_max_gauss),
+            "trend_angle_deg": float(AngleOfTrend),
+            "final_time_s": float(Gauss_x_value),
+            "final_frequency_hz": float(Gauss_y_value),
+            "stop_reason": forced_stop_reason,
+        })
+
+    # Reaching the guard means that this side did not converge.
     if i >= max_iterations:
         return None
 
