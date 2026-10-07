@@ -188,3 +188,57 @@ These are descriptive diagnostics, not yet candidate rejection thresholds.
 ### Frequency-aware matching check
 
 Optional time+frequency matching preserves the same total TP count (123) on this dataset but changes two ambiguous assignments in one WAV (20250615_185828.wav). This confirms that frequency-aware assignment is useful for curve-error evaluation without inflating detector recall.
+
+
+## Grouped development / hold-out split and adaptive_v4
+
+After the first independent validation pass, the 61-WAV dataset was frozen into
+a deterministic grouped split by source folder/session. This prevents files from
+the same recording session leaking between development and hold-out.
+
+Split rule:
+- group = relative parent folder of each WAV
+- deterministic SHA-256 assignment using seed `bfsp-holdout-v1`
+- target hold-out fraction = 30%
+
+Result:
+- development: 46 WAV, 15 positive, 31 no_chirp, 111 manual chirps
+- hold-out: 15 WAV, 6 positive, 9 no_chirp, 38 manual chirps
+
+The hold-out was not used to select candidate thresholds.
+
+### Development diagnostics
+
+On adaptive_v3, false positives were dominated by short blobs:
+- median matched TP width: ~4.30 ms overall
+- median no_chirp FP width: ~2.00 ms overall
+- low-frequency TP median width on development: ~8.33 ms
+- low-frequency FP median width on development: ~2.00 ms
+- low-frequency TP median slope: ~-570 Hz/ms
+- low-frequency FP median slope: ~-4.3 kHz/ms
+- the v3 high-frequency recovery branch produced no additional TP on the new development split, only FP.
+
+This motivated adaptive_v4:
+- general branch minimum blob width: 1.5 ms
+- low-frequency branch minimum width: 3.0 ms
+- low-frequency slope constrained to [-1500, 0) Hz/ms
+- 20 ms time+frequency NMS
+- no high-frequency recovery branch
+
+### adaptive_v4 result
+
+| split | TP | FP | FN | precision | recall | F1 | no_chirp FP | no_chirp specificity |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| development | 88 | 92 | 23 | 0.4889 | 0.7928 | 0.6048 | 70 | 0.387 |
+| hold-out | 28 | 23 | 10 | 0.5490 | 0.7368 | 0.6292 | 22 | 0.444 |
+| all 61 WAV | 116 | 115 | 33 | 0.5022 | 0.7785 | 0.6105 | 92 | 0.400 |
+
+Compared with adaptive_v3 on the full 61-WAV dataset:
+- precision: 0.3298 -> 0.5022
+- recall: 0.8255 -> 0.7785
+- F1: 0.4713 -> 0.6105
+- no_chirp FP: 202 -> 92
+
+The improvement reproduces on the grouped hold-out, so it is unlikely to be
+only an in-sample threshold effect. adaptive_v4 remains opt-in until the
+modelling/ridge stage is revalidated end-to-end.
