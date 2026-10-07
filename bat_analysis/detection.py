@@ -36,6 +36,72 @@ class Detection:
     score: float | None = None
 
 
+def _coarse_ridge_seed(
+    pd_b_blob: np.ndarray,
+    blob_mask: np.ndarray,
+    blob_slice,
+    freqs_b: np.ndarray,
+    times: np.ndarray,
+) -> dict:
+    """Extract a coarse downward ridge seed from one connected detector blob.
+
+    This seed is not the final ridge. For each time column we keep the strongest
+    in-blob frequency, lightly median-filter that path, then find the most
+    coherent short downward segment. The result is used only to initialize
+    difficult broad-FM calls where a single global peak can sit on the tail.
+    """
+    ridge_t = []
+    ridge_f = []
+    for j in range(blob_mask.shape[1]):
+        rows = np.flatnonzero(blob_mask[:, j])
+        if rows.size == 0:
+            continue
+        k = int(rows[np.argmax(pd_b_blob[rows, j])])
+        ridge_t.append(float(times[blob_slice[1].start + j]))
+        ridge_f.append(float(freqs_b[blob_slice[0].start + k]))
+
+    if len(ridge_t) < 3:
+        return {}
+
+    ridge_t = np.asarray(ridge_t, dtype=float)
+    ridge_f = np.asarray(ridge_f, dtype=float)
+    ridge_f_smooth = base.scipy.ndimage.median_filter(
+        ridge_f, size=3, mode="nearest"
+    )
+
+    best = None
+    max_window = min(len(ridge_t), 12)
+    for window in range(3, max_window + 1):
+        for start in range(0, len(ridge_t) - window + 1):
+            x = ridge_t[start:start + window]
+            y = ridge_f_smooth[start:start + window]
+            slope_hz_s, intercept = np.polyfit(x, y, 1)
+            slope_hz_ms = slope_hz_s / 1000.0
+            if slope_hz_ms >= -500.0:
+                continue
+
+            pred = slope_hz_s * x + intercept
+            ss_res = float(np.sum((y - pred) ** 2))
+            ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+            r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+            drop_khz = max(0.0, float(y[0] - y[-1]) / 1000.0)
+            score = drop_khz * max(r2, 0.05) * np.sqrt(window)
+
+            if best is None or score > best["coarse_seed_score"]:
+                mid_t = 0.5 * float(x[0] + x[-1])
+                mid_f = float(slope_hz_s * mid_t + intercept)
+                best = {
+                    "coarse_seed_freq_hz": mid_f,
+                    "coarse_seed_time_s": mid_t,
+                    "coarse_seed_slope_hz_per_ms": float(slope_hz_ms),
+                    "coarse_seed_score": float(score),
+                    "coarse_seed_r2": float(r2),
+                    "coarse_seed_drop_khz": float(drop_khz),
+                }
+
+    return best or {}
+
+
 def _extract_candidates(y, sr, *, snr_threshold_db, percentile_q, fmin, fmax, n_fft, hop):
     snr_map, freqs_b, times, dbg = base.compute_snr_map(
         y, sr, fmin=fmin, fmax=fmax, n_fft=n_fft, hop=hop,
@@ -59,12 +125,31 @@ def _extract_candidates(y, sr, *, snr_threshold_db, percentile_q, fmin, fmax, n_
         t_idx = slc[1].start + t_rel
         t_start = float(blob["t_start"])
         t_end = float(blob["t_end"])
+        coarse = _coarse_ridge_seed(
+            pd_b[slc], blob_mask, slc, freqs_b, times
+        )
+        f_span = max(float(blob["f_high"] - blob["f_low"]), 1e-9)
+        peak_position = float(
+            (float(freqs_b[f_idx]) - float(blob["f_low"])) / f_span
+        )
+        use_coarse = (
+            float(blob["width_ms"]) >= 8.0
+            and float(blob["height_hz"]) >= 20000.0
+            and peak_position <= 0.15
+            and bool(coarse)
+        )
+
         candidates.append({
             **blob,
             "time_mid": float(times[t_idx]),
             "duration": max(1e-6, t_end - t_start),
             "peak_freq_hz": float(freqs_b[f_idx]),
             "peak_db": float(pd_b[f_idx, t_idx]),
+            "peak_position_in_bbox": peak_position,
+            "broad_fm_seed_freq_hz": (
+                float(coarse["coarse_seed_freq_hz"]) if use_coarse else np.nan
+            ),
+            **coarse,
         })
     return candidates
 
