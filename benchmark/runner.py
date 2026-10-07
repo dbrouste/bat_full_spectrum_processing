@@ -383,6 +383,18 @@ def run_benchmark(
             return float("nan")
         return float(pd.to_numeric(modeled[name], errors="coerce").mean())
 
+    def median_col(name: str) -> float:
+        if modeled.empty or name not in modeled:
+            return float("nan")
+        return float(pd.to_numeric(modeled[name], errors="coerce").median())
+
+    def threshold_count(name: str, threshold: float, above: bool) -> int:
+        if modeled.empty or name not in modeled:
+            return 0
+        values = pd.to_numeric(modeled[name], errors="coerce")
+        mask = values > threshold if above else values < threshold
+        return int(mask.fillna(False).sum())
+
     no_chirp_files = 0
     no_chirp_fp_total = 0
     no_chirp_files_with_fp = 0
@@ -422,9 +434,17 @@ def run_benchmark(
         "model_success_rate_on_tp": float(total_model_ok / total_tp) if total_tp else 0.0,
         "end_to_end_recall": float(total_model_ok / total_ref) if total_ref else 0.0,
         "curve_median_abs_error_khz_mean": mean_col("median_abs_error_khz"),
+        "curve_median_abs_error_khz_median": median_col("median_abs_error_khz"),
         "curve_rmse_khz_mean": mean_col("rmse_khz"),
+        "curve_rmse_khz_median": median_col("rmse_khz"),
         "curve_p95_khz_mean": mean_col("p95_abs_error_khz"),
+        "curve_p95_khz_median": median_col("p95_abs_error_khz"),
         "curve_coverage_mean": mean_col("coverage"),
+        "curve_coverage_median": median_col("coverage"),
+        "model_error_gt_2khz_count": threshold_count("median_abs_error_khz", 2.0, True),
+        "model_error_gt_5khz_count": threshold_count("median_abs_error_khz", 5.0, True),
+        "model_coverage_lt_0_5_count": threshold_count("coverage", 0.5, False),
+        "model_coverage_lt_0_75_count": threshold_count("coverage", 0.75, False),
         "detector_kwargs": det_kwargs,
         "model_frequency_seeded": supports_seed_freq,
         "matching_mode": matching_mode,
