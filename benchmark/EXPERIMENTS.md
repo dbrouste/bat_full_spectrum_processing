@@ -302,3 +302,28 @@ Conclusion:
 - reuse one interpolator per chirp;
 - retain a hard runtime/iteration guard;
 - validate each change against curve error and coverage, not only model success.
+
+
+## Adaptive ridge tracking step — implementation
+
+The fixed 40-us ridge extrapolation step has been replaced in the canonical
+modelling API by a conservative adaptive rule:
+
+- duration <= 4 ms: 40 us
+- duration 4-8 ms: linear ramp 40 -> 60 us
+- duration >= 8 ms: 60 us
+- detected peak < 40 kHz and duration >= 5 ms: force at least 60 us
+
+The rule is deliberately capped at 60 us because 60 us was the largest step
+already validated in the side-level convergence experiment. It is applied to
+both initial left/right tracking and segmented extensions. The historical
+internal variable name `step_ns` in ridge extrapolation was corrected to
+`step_us`; the actual arithmetic had always been microseconds.
+
+Main commits:
+- `0773c63044f3abac55ccddb1b54f1ac756f4cbcc`: expose ridge step
+- `b58da98c32dc687314ad362d957c0f770c41bad0`: fix process_side signature
+- `07e59c7817597b1d96e647c6db98aa04f9c91ecc`: adaptive step in canonical modeller
+
+The benchmark runner now records `tracking_step_us` per matched chirp so
+runtime, coverage and curve error can be stratified by the chosen step.
