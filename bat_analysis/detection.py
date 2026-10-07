@@ -14,8 +14,12 @@ adaptive_v2
     and time+frequency NMS.
 adaptive_v3
     Conservative extension of v2: 20 ms time+frequency NMS, a narrow high-
-    frequency recovery branch, and bbox overlap deduplication. Keep opt-in until
-    validated on independent annotated/no_chirp WAVs.
+    frequency recovery branch, and bbox overlap deduplication.
+adaptive_v4
+    Independent-dataset refinement: removes the unhelpful high-frequency
+    recovery branch, rejects very short general blobs, and keeps only long,
+    shallow low-frequency blobs. Developed after freezing a grouped
+    development/hold-out split of the 61-WAV validation dataset.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -143,6 +147,9 @@ def detect_candidates_snr_blobs(
     highfreq_max_blob_slope_hz_per_ms: float = -1000.0,
     bbox_dedup_time_iou: float = 0.20,
     bbox_dedup_freq_iou: float = 0.40,
+    v4_general_min_width_ms: float = 1.5,
+    v4_lowfreq_min_width_ms: float = 3.0,
+    v4_lowfreq_min_slope_hz_per_ms: float = -1500.0,
 ):
     if slope_filter_mode == "legacy":
         return base.detect_candidates_snr_blobs(
@@ -153,8 +160,11 @@ def detect_candidates_snr_blobs(
             echo_suppression_window_ms=echo_suppression_window_ms,
         )
 
-    if slope_filter_mode not in {"adaptive_lowfreq", "adaptive_v2", "adaptive_v3"}:
-        raise ValueError("slope_filter_mode must be 'legacy', 'adaptive_lowfreq', 'adaptive_v2', or 'adaptive_v3'")
+    if slope_filter_mode not in {"adaptive_lowfreq", "adaptive_v2", "adaptive_v3", "adaptive_v4"}:
+        raise ValueError(
+            "slope_filter_mode must be 'legacy', 'adaptive_lowfreq', "
+            "'adaptive_v2', 'adaptive_v3', or 'adaptive_v4'"
+        )
 
     general_raw = _extract_candidates(
         y, sr, snr_threshold_db=snr_threshold_db, percentile_q=percentile_q,
@@ -203,6 +213,27 @@ def detect_candidates_snr_blobs(
     nms_window = 16.0 if slope_filter_mode == "adaptive_v2" and echo_suppression_window_ms == 10.0 else echo_suppression_window_ms
     if slope_filter_mode == "adaptive_v2":
         return _time_freq_nms(general + low, nms_window, echo_suppression_freq_window_hz)
+
+    if slope_filter_mode == "adaptive_v4":
+        general_v4 = [
+            c for c in general
+            if float(c["width_ms"]) >= v4_general_min_width_ms
+        ]
+        low_v4 = [
+            c for c in low_raw
+            if float(c["f_high"]) <= lowfreq_max_hz
+            and (min_blob_size <= 0 or int(c["size"]) > min_blob_size)
+            and float(c["height_hz"]) >= lowfreq_min_blob_height_hz
+            and float(c["width_ms"]) >= v4_lowfreq_min_width_ms
+            and v4_lowfreq_min_slope_hz_per_ms <= float(c["slope_hz_per_ms"]) < 0.0
+        ]
+        low_v4 = [{**c, "detector_branch": "lowfreq"} for c in low_v4]
+        v4_window = 20.0 if echo_suppression_window_ms == 10.0 else echo_suppression_window_ms
+        return _time_freq_nms(
+            general_v4 + low_v4,
+            v4_window,
+            echo_suppression_freq_window_hz,
+        )
 
     high_raw = _extract_candidates(
         y, sr, snr_threshold_db=highfreq_snr_threshold_db, percentile_q=percentile_q,
