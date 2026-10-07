@@ -379,3 +379,26 @@ The largest concentration is in `20250615_185828.wav`, followed by
 `rec_20260103_201256.wav` and `rec_20260103_202314.wav`. These should be
 treated as ridge-assignment/extension-quality problems, not detector or
 convergence problems.
+
+
+## Remaining modelling quality outliers
+
+With adaptive tracking, all 116 matched adaptive_v4 true positives now return a
+curve. Residual problems are quality rather than convergence:
+- 8 calls have median frequency error above 2 kHz
+- 1 call is above 5 kHz
+- 11 calls have coverage below 0.5
+- 44 calls have coverage below 0.75
+
+The largest outlier is 20250615_185828.wav, chirp 11. The manual annotation spans
+a broad downward FM from about 111 kHz to 53 kHz, while the detector peak is
+near 55 kHz. The current seed can therefore lock onto the strong low-frequency
+tail instead of the full sweep.
+
+Exploratory alternatives using detector bbox centre, upper-quartile frequency,
+or detector-blob slope did not generalize across the worst eight calls, so none
+was promoted to the canonical modeller.
+
+The next candidate is a coarse time-frequency ridge derived from the detector
+blob itself, used only to initialize orientation and frequency band before the
+existing Gaussian ridge refinement.
