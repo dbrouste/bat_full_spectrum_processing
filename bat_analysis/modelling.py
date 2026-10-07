@@ -145,7 +145,14 @@ def _adaptive_tracking_step_us(duration_s: float, seed_freq_hz: float | None) ->
 
     return float(np.clip(step, 40.0, 60.0))
 
-def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | None = None):
+def process_full_spectrum(
+    y_use,
+    sr,
+    time_mid,
+    duration,
+    seed_freq_hz: float | None = None,
+    broad_fm_seed_freq_hz: float | None = None,
+):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
     If ``seed_freq_hz`` is supplied, the initial ridge maximum is searched only
@@ -155,13 +162,18 @@ def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | N
     behaviour.
     """
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
-    tracking_step_us = _adaptive_tracking_step_us(duration, seed_freq_hz)
 
-    if seed_freq_hz is None or not np.isfinite(seed_freq_hz):
+    effective_seed_freq_hz = seed_freq_hz
+    if broad_fm_seed_freq_hz is not None and np.isfinite(broad_fm_seed_freq_hz):
+        effective_seed_freq_hz = float(broad_fm_seed_freq_hz)
+
+    tracking_step_us = _adaptive_tracking_step_us(duration, effective_seed_freq_hz)
+
+    if effective_seed_freq_hz is None or not np.isfinite(effective_seed_freq_hz):
         curve_all = base.initial_call_trend(y_chun, sr, duration)
     else:
         curve_all = _initial_call_trend_seeded(
-            y_chun, sr, duration, float(seed_freq_hz)
+            y_chun, sr, duration, float(effective_seed_freq_hz)
         )
     if curve_all is None or len(curve_all) == 0:
         return None
