@@ -48,7 +48,7 @@ def _initial_call_trend_seeded(
     if sp.size == 0 or len(times) == 0:
         return None
 
-    center_s = (len(yt) / sr) / 2.0
+    interp_S = base.RectBivariateSpline(freqs, times, sp)\n\n    center_s = (len(yt) / sr) / 2.0
     duration = max(float(duration), 1e-6)
     half_time_s = max(0.0015, min(duration / 2.0, 0.004))
 
