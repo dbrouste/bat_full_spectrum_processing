@@ -520,3 +520,61 @@ Conclusion: convergence is now solved on this set. The next algorithmic work
 should target broad-FM initialization/extension quality, not higher iteration
 limits. The benchmark now has enough diagnostics to distinguish truncation,
 frequency offset, shape mismatch, and seed/localization failures.
+
+
+## Continuous coarse-ridge initial segment experiment
+
+A more aggressive initializer was tested after structured outlier analysis. Instead
+of using only one coarse-ridge frequency and slope, the experiment builds the
+initial seven-point trend directly from the strongest coherent descending segment
+inside the detector blob.
+
+For each matched candidate:
+- keep the strongest in-blob frequency in each detector time column;
+- apply a 3-column median filter;
+- search contiguous 4-15-column windows;
+- fit a line and score it from downward frequency drop, linearity and window length;
+- resample the best segment to seven initial time/frequency points;
+- pass those points to the existing Gaussian `process_side()` refinement.
+
+### Seven current >2 kHz outliers
+
+Using the same local baseline implementation for before/after comparison:
+
+| file / chirp | baseline median error | continuous coarse init | effect |
+|---|---:|---:|---|
+| 20250615_185828 / 4 | 3.95 kHz | **1.32 kHz** | strong improvement |
+| rec_20260103_202314 / 14 | 3.76 kHz | **2.46 kHz** | improvement, coverage also rises |
+| rec_20260103_201256 / 7 | 2.97 kHz | **2.73 kHz** | small improvement |
+| rec_20260103_202314 / 1 | 2.45 kHz | 2.67 kHz | small regression |
+| rec_20260103_201256 / 6 | 2.33 kHz | **3.68 kHz** | regression |
+| 20250615_185828 / 12 | 2.14 kHz | **3.18 kHz** | regression |
+| 20260713_175458 / 1 | 2.04 kHz | **0.24 kHz** | strong improvement |
+
+The method therefore fixes some truncation/localization cases very well, but is
+not safe as a general replacement initializer.
+
+### Conservative morphology trigger exploration
+
+A possible morphology-only trigger was examined:
+- coherent coarse segment <= 2 ms;
+- R² >= 0.90;
+- downward drop >= 6 kHz.
+
+It selects 12/116 current TP. Direct coarse initialization improves several of
+them, including the major outliers above, but also worsens some already-good
+calls. A particularly important observation is that agreement with the detector
+coarse path is not sufficient to choose between the normal and coarse models:
+some degraded models follow the detector ridge more closely while moving away
+from the human reference, consistent with nearby harmonics/components.
+
+Conclusion: do **not** promote direct seven-point coarse initialization globally.
+The safer next experiment is a two-hypothesis approach:
+1. build the normal seeded ridge;
+2. build the continuous coarse-ridge alternative only for suspicious broad/steep
+   candidates;
+3. devise an internal selection criterion that includes signal support **and**
+   component/harmonic consistency, rather than detector-ridge proximity alone.
+
+The existing selective coarse frequency+slope fallback remains the canonical
+implementation for now.
