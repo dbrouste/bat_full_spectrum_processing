@@ -449,3 +449,74 @@ Implementation:
 - main detection extracts coarse ridge seed metadata;
 - main modelling accepts broad-FM seed frequency and slope;
 - benchmark passes and records those values when the detector activates them.
+
+
+## Structured ridge validation with stop reasons — current 116 TP
+
+After adding structured `process_side()` diagnostics, the full current
+adaptive_v4 + adaptive-step + selective coarse-ridge pipeline was rerun on all
+116 frequency-aware matched TP.
+
+Current ridge validation:
+- model success: **116 / 116**
+- median absolute frequency error: **0.423 kHz**
+- median RMSE: **0.652 kHz**
+- median P95 absolute error: **1.335 kHz**
+- median temporal coverage: **0.864**
+- median runtime in the diagnostic run: **1.04 s/chirp**
+- 7/116 calls have median error >2 kHz
+- 0/116 are >5 kHz
+- 11/116 have coverage <0.5
+- 45/116 have coverage <0.75
+
+Error distribution:
+- P90 median-error: **1.323 kHz**
+- P95 median-error: **2.100 kHz**
+- P99 median-error: **3.644 kHz**
+
+Coverage matters strongly. For calls with coverage >=0.75, median error is
+~0.230 kHz and P95 error is ~1.20 kHz. For coverage >=0.90, median error is
+~0.210 kHz and P95 is ~0.67 kHz.
+
+### Stop-reason instrumentation
+
+`process_side()` now reports explicit reasons instead of only falling out of
+one long while-condition. Observed events over the 116 current TP:
+
+| stop reason | events |
+|---|---:|
+| previous_curve_overlap | 237 |
+| no_time_progress | 210 |
+| low_amplitude | 109 |
+| gaussian_frequency_offset | 88 |
+| gaussian_variation | 76 |
+| gaussian_offset | 65 |
+| input_none | 46 |
+| sample_too_short | 25 |
+| initial_sample_too_short | 2 |
+
+Most `previous_curve_overlap` events occur in segmented extension and are
+expected: the side facing the already-built curve is immediately rejected.
+They are not model failures.
+
+The remaining >2-kHz outliers are all broad/steep FM calls. Their manual spans
+are roughly 28-65 kHz over only ~2.3-4.0 ms. Among the 7 error outliers,
+`no_time_progress` occurs about 4.0 times/chirp versus ~1.7 times/chirp for
+the other 109 calls. Initial-side stops are especially dominated by
+`no_time_progress` in the outlier group.
+
+Structured triage of the seven remaining >2-kHz cases:
+- one severe seed/localization + truncation case
+  (`rec_20260103_202314.wav`, chirp 14; coverage ~0.02);
+- three partial-truncation cases with coverage ~0.37-0.47;
+- one high-coverage frequency-offset case
+  (`rec_20260103_201256.wav`, chirp 7; coverage ~0.87, bias ~-2.9 kHz);
+- one high-coverage shape-mismatch case
+  (`rec_20260103_202314.wav`, chirp 1; coverage ~0.79, near-zero bias);
+- one mixed partial-coverage / localization case
+  (`20250615_185828.wav`, chirp 12).
+
+Conclusion: convergence is now solved on this set. The next algorithmic work
+should target broad-FM initialization/extension quality, not higher iteration
+limits. The benchmark now has enough diagnostics to distinguish truncation,
+frequency offset, shape mismatch, and seed/localization failures.
