@@ -113,6 +113,38 @@ def _initial_call_trend_seeded(
     return results
 
 
+
+def _adaptive_tracking_step_us(duration_s: float, seed_freq_hz: float | None) -> float:
+    """Choose a conservative ridge-tracking step from call morphology.
+
+    Historical tracking used a fixed 40 us step. Diagnostics on the grouped
+    validation set showed that long, shallow low-frequency calls often hit the
+    iteration guard, while short/steep calls were already well behaved.
+
+    The adaptive rule is intentionally conservative and bounded to 40-60 us:
+    - <=4 ms: 40 us
+    - 4-8 ms: linear ramp from 40 to 60 us
+    - >=8 ms: 60 us
+    - low-frequency calls (<40 kHz) of at least 5 ms use at least 60 us
+    """
+    duration_ms = max(0.0, float(duration_s)) * 1000.0
+    if duration_ms <= 4.0:
+        step = 40.0
+    elif duration_ms >= 8.0:
+        step = 60.0
+    else:
+        step = 40.0 + 5.0 * (duration_ms - 4.0)
+
+    if (
+        seed_freq_hz is not None
+        and np.isfinite(seed_freq_hz)
+        and float(seed_freq_hz) < 40000.0
+        and duration_ms >= 5.0
+    ):
+        step = max(step, 60.0)
+
+    return float(np.clip(step, 40.0, 60.0))
+
 def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | None = None):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -123,6 +155,7 @@ def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | N
     behaviour.
     """
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
+    tracking_step_us = _adaptive_tracking_step_us(duration, seed_freq_hz)
 
     if seed_freq_hz is None or not np.isfinite(seed_freq_hz):
         curve_all = base.initial_call_trend(y_chun, sr, duration)
@@ -140,19 +173,22 @@ def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | N
     times = librosa.frames_to_time(np.arange(s.shape[1]), sr=sr, hop_length=100)
 
     curve_all = base.process_side(
-        curve_all, s, freqs, times, sr, LeftRight=0, max_amplitude=max_value
+        curve_all, s, freqs, times, sr, LeftRight=0, max_amplitude=max_value,
+        tracking_step_us=tracking_step_us
     )
     if curve_all is None:
         return None
 
     curve_all = base.process_side(
-        curve_all, s, freqs, times, sr, LeftRight=1, max_amplitude=max_value
+        curve_all, s, freqs, times, sr, LeftRight=1, max_amplitude=max_value,
+        tracking_step_us=tracking_step_us
     )
     if curve_all is None:
         return None
 
     curve_segmented = base.extend_trend_left(
-        y_chun, sr, curve_all, s, freqs, times, max_value
+        y_chun, sr, curve_all, s, freqs, times, max_value,
+        tracking_step_us=tracking_step_us
     )
     if curve_segmented is not None:
         max_segment = max(entry[2] for entry in curve_segmented)
@@ -163,14 +199,16 @@ def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | N
         ):
             curve_all = base.concatenate_trends(curve_segmented, curve_all)
             curve_segmented = base.extend_trend_left(
-                y_chun, sr, curve_all, s, freqs, times, max_value
+                y_chun, sr, curve_all, s, freqs, times, max_value,
+                tracking_step_us=tracking_step_us
             )
             if curve_segmented is None:
                 break
             max_segment = max(entry[2] for entry in curve_segmented)
 
     curve_segmented = base.extend_trend_right(
-        y_chun, sr, curve_all, s, freqs, times, max_value
+        y_chun, sr, curve_all, s, freqs, times, max_value,
+        tracking_step_us=tracking_step_us
     )
     if curve_segmented is not None:
         max_segment = max(entry[2] for entry in curve_segmented)
@@ -183,7 +221,8 @@ def process_full_spectrum(y_use, sr, time_mid, duration, seed_freq_hz: float | N
         ):
             curve_all = base.concatenate_trends(curve_all, curve_segmented)
             curve_segmented = base.extend_trend_right(
-                y_chun, sr, curve_all, s, freqs, times, max_value
+                y_chun, sr, curve_all, s, freqs, times, max_value,
+                tracking_step_us=tracking_step_us
             )
             if curve_segmented is None:
                 break
