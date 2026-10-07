@@ -927,6 +927,11 @@ def sample_line_from_max_amp_dynamic(S, freqs, times, sample_point, sr, slope=1,
     while True:
         freq = freq_to_sample + t * real_slope
         time = time_to_sample + t
+
+        # Never extrapolate the spline outside the local spectrogram window.
+        if not (freqs[0] <= freq <= freqs[-1] and times[0] <= time <= times[-1]):
+            break
+
         amplitude = interp_S(freq, time)[0][0]
 
         if t != 0 and amplitude <= threshold_value:
@@ -945,10 +950,16 @@ def sample_line_from_max_amp_dynamic(S, freqs, times, sample_point, sr, slope=1,
 
     # Sampling in the negative direction
     neg_ts, neg_amplitudes = [], []
-    t, neg_count = -step, 0
+    # Match the normalized positive-direction step. The historical -step
+    # could jump far outside the TF window for steep perpendicular slopes.
+    t, neg_count = -step / np.sqrt(1 + slope ** 2), 0
     while True:
         freq = freq_to_sample + t * real_slope
         time = time_to_sample + t
+
+        if not (freqs[0] <= freq <= freqs[-1] and times[0] <= time <= times[-1]):
+            break
+
         amplitude = interp_S(freq, time)[0][0]
 
         if amplitude <= threshold_value:
@@ -1686,8 +1697,7 @@ def smooth_trend_spline2(trend_results, smoothing_factor=1):
 
     return spline_func, times_smooth, freqs_smooth
 
-def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitude, Previous_Curve=None,
-                 max_iterations=500, min_time_progress=1e-9):
+def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitude, Previous_Curve=None,\n                 max_iterations=250, min_time_progress=1e-7):
     """
     Processes one side (Left or Right) for Gaussian variation analysis.
 
