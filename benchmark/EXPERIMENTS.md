@@ -136,3 +136,55 @@ The largest improvement was on WAVs containing simultaneous bands/harmonics: fre
 ## Important limitation
 
 These values are development-set results, not an unbiased estimate of generalization. The detector parameters were selected on only 8 WAVs / 158 chirps and there are currently no validated `no_chirp` WAVs. Keep `adaptive_v2` and `adaptive_v3` opt-in until more annotations are available and a hold-out validation set can be reserved.
+
+
+## Independent validation dataset — 2026-10-07
+
+A larger exported dataset was evaluated without retuning detector parameters first.
+
+Dataset:
+- 61 validated WAV files
+- 21 annotated positive WAV files
+- 40 no_chirp negative WAV files
+- 149 manually annotated chirps
+
+Historical temporal Hungarian matching was kept for detector comparability.
+
+| metric | legacy | adaptive_v2 | adaptive_v3 |
+|---|---:|---:|---:|
+| TP | 72 | 123 | 123 |
+| FP | 156 | 254 | 250 |
+| FN | 77 | 26 | 26 |
+| precision | 0.3158 | 0.3263 | 0.3298 |
+| recall | 0.4832 | 0.8255 | 0.8255 |
+| F1 | 0.3820 | 0.4677 | 0.4713 |
+| FP on 40 no_chirp WAV | 120 | 203 | 202 |
+| no_chirp files with >=1 FP | 25 | 29 | 29 |
+| no_chirp file specificity | 0.375 | 0.275 | 0.275 |
+| FP / no_chirp WAV | 3.000 | 5.075 | 5.050 |
+
+Interpretation:
+- The adaptive detectors generalize strongly for recall: 82.6% vs 48.3% legacy.
+- The apparent precision gains seen on the original 8-WAV development set do not generalize.
+- Most remaining error is now false-positive rejection, especially on true negative recordings.
+- v3 is only marginally better than v2 on this independent set, so further threshold relaxation is not justified.
+- Parameters must not be tuned directly against this validation set without reserving a new hold-out subset.
+
+### False-positive structure (adaptive_v3)
+
+Of the 250 FP:
+- 202 occur in no_chirp WAVs and 48 in positive WAVs.
+- no_chirp FP by detector branch: general=127, lowfreq=69, highfreq=6.
+- Median TP blob width is ~4.30 ms; median no_chirp FP width is ~2.00 ms.
+- Median TP peak frequency is ~46.5 kHz; median no_chirp FP peak frequency is ~34.5 kHz.
+- Median TP blob size is ~61 pixels; median no_chirp FP size is ~28 pixels.
+
+These are descriptive diagnostics, not yet candidate rejection thresholds.
+
+### False-negative structure (adaptive_v3)
+
+26 / 149 manual chirps are missed. Median FN duration is ~5.67 ms and median mean frequency is ~34.25 kHz. Misses are concentrated in a small number of recordings and include both long shallow low-frequency calls and some short high-frequency FM calls.
+
+### Frequency-aware matching check
+
+Optional time+frequency matching preserves the same total TP count (123) on this dataset but changes two ambiguous assignments in one WAV (20250615_185828.wav). This confirms that frequency-aware assignment is useful for curve-error evaluation without inflating detector recall.
