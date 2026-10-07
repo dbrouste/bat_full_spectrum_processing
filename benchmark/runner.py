@@ -292,10 +292,15 @@ def run_benchmark(
                     "time_mid": float(cand["time_mid"]),
                     "duration": dur,
                 }
-                if supports_seed_freq:
-                    seed = float(cand.get("peak_freq_hz", np.nan))
-                    if np.isfinite(seed):
-                        model_kwargs["seed_freq_hz"] = seed
+                seed = float(cand.get("peak_freq_hz", np.nan))
+                if supports_seed_freq and np.isfinite(seed):
+                    model_kwargs["seed_freq_hz"] = seed
+
+                step_fn = getattr(module, "_adaptive_tracking_step_us", None)
+                if callable(step_fn):
+                    row["tracking_step_us"] = float(
+                        step_fn(dur, seed if np.isfinite(seed) else None)
+                    )
 
                 curve = module.process_full_spectrum(y_filtered, sr, **model_kwargs)
                 model_time = time.perf_counter() - mt0
