@@ -868,7 +868,7 @@ def interpolate_spectrogram(S):
     return interpolated_function
 
 
-def sample_line_from_max_amp_dynamic(S, freqs, times, sample_point, sr, slope=1, amplitude_threshold_percent=15, nb_step=50):
+def sample_line_from_max_amp_dynamic(S, freqs, times, sample_point, sr, slope=1, amplitude_threshold_percent=15, nb_step=50, interpolator=None):
     """
     Samples amplitude values along a line through the maximum amplitude point in a spectrogram,
     using frequency and time coordinates instead of raw indices.
@@ -1295,7 +1295,7 @@ def initial_call_trend(yt, sr, duration, step_ns=50):
         # Sample amplitude values along a line through the candidate point
         candidate_point = (candidate_freq, candidate_time)  # Create a tuple (freq, time)
 
-        t_line, amplitude_line = sample_line_from_max_amp_dynamic(Sp, freqss, timess, candidate_point, sr)
+        t_line, amplitude_line = sample_line_from_max_amp_dynamic(Sp, freqss, timess, candidate_point, sr, interpolator=interp_S)
 
         #plot_amplitude_line_with_gaussian(t_line, amplitude_line)
 
@@ -1697,7 +1697,7 @@ def smooth_trend_spline2(trend_results, smoothing_factor=1):
 
     return spline_func, times_smooth, freqs_smooth
 
-def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitude, Previous_Curve=None,\n                 max_iterations=250, min_time_progress=1e-7):
+def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitude, Previous_Curve=None,\n                 max_iterations=250, min_time_progress=1e-7, interpolator=None):
     """
     Processes one side (Left or Right) for Gaussian variation analysis.
 
@@ -1922,7 +1922,7 @@ def process_chunk_spectrum(y_use, sr, time_mid, duration):
 
 ## Get segmented call position
 
-def find_max_gauss_z(Seven_points, Spectro, freqs, times, sr, LeftRight, max_step=11):
+def find_max_gauss_z(Seven_points, Spectro, freqs, times, sr, LeftRight, max_step=11, interpolator=None):
     if Seven_points is None:
         return None
 
@@ -1968,7 +1968,7 @@ def find_max_gauss_z(Seven_points, Spectro, freqs, times, sr, LeftRight, max_ste
 
     return Max_Gauss_coordinate
 
-def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
+def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50, Spectro=None, freqs=None, times=None, interpolator=None):
     """
     Computes the spectrogram of the given audio signal y, finds the maximum amplitude index,
     and analyzes the trend using Gaussian fit error metrics along sampled amplitude lines.
@@ -2011,7 +2011,7 @@ def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
         # Sample amplitude values along a line through the candidate point
         candidate_point = (candidate_freq, candidate_time)  # Create a tuple (freq, time)
 
-        t_line, amplitude_line = sample_line_from_max_amp_dynamic(Sp, freqss, timess, candidate_point, sr)
+        t_line, amplitude_line = sample_line_from_max_amp_dynamic(Sp, freqss, timess, candidate_point, sr, interpolator=interp_S)
 
         #plot_amplitude_line_with_gaussian(t_line, amplitude_line)
 
@@ -2030,26 +2030,26 @@ def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
 
     return results
 
-def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value):
+def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value, interpolator=None):
     if curve_all is None:
         return None
 
-    Max_Gauss_coordinate = find_max_gauss_z(curve_all, S, freqs, times, sr, LeftRight=0,max_step=5)
+    Max_Gauss_coordinate = find_max_gauss_z(curve_all, S, freqs, times, sr, LeftRight=0,max_step=5, interpolator=interpolator)
     #print('Max_Gauss_coordinate',Max_Gauss_coordinate)
     #print('001')
-    curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
+    curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate, Spectro=S, freqs=freqs, times=times, interpolator=interpolator)
     #print('002')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, interpolator=interpolator)
     #print('003')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, interpolator=interpolator)
     #print('004')
     return curve_segmented
 
-def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value):
+def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value, interpolator=None):
     if curve_all is None:
         return None
 
-    Max_Gauss_coordinate = find_max_gauss_z(curve_all, S, freqs, times, sr, LeftRight=1,max_step=2)
+    Max_Gauss_coordinate = find_max_gauss_z(curve_all, S, freqs, times, sr, LeftRight=1,max_step=2, interpolator=interpolator)
 
     curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
 
