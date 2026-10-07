@@ -1392,7 +1392,7 @@ def fit_polynomial(candidate_points, smoothing_factor=1, degree=2):
         #print("Polynomial fitting failed:", e)
         return None, None, None
 
-def get_extrapolated_points(trend_results, step_ns=40, LeftRight=0, nb_point_to_consider=8):
+def get_extrapolated_points(trend_results, step_us=40, LeftRight=0, nb_point_to_consider=8):
     """
     Returns an extrapolated point on the smoothing spline curve along with the slope
     of the perpendicular line at this point.
@@ -1401,7 +1401,7 @@ def get_extrapolated_points(trend_results, step_ns=40, LeftRight=0, nb_point_to_
     - trend_results: List of lists containing extracted data points.
       Each entry: [y_x, max_gauss_z, percent_variation, max_distance, popt, slope].
     - smoothing_factor: Smoothing factor for UnivariateSpline.
-    - step_ns: Step size along the slope direction.
+    - step_us: Step size along the slope direction, in microseconds.
     - LeftRight: 0 to extrapolate before the first point, 1 to extrapolate after the last point.
 
     Returns:
@@ -1409,7 +1409,7 @@ def get_extrapolated_points(trend_results, step_ns=40, LeftRight=0, nb_point_to_
     - slope_perp: Slope of the perpendicular line at the extrapolated point.
     """
 
-    step = step_ns / 1e6  # Convert ns to seconds
+    step = step_us / 1e6  # Convert microseconds to seconds
 
     # Extract and sort (time, frequency) points from trend_results
     candidate_points = np.array([(entry[0], entry[1]) for entry in trend_results])
@@ -1726,7 +1726,7 @@ def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitu
 
     # Compute initial extrapolated points and sample amplitude line
     NewPointExtrapolated, NewPointExtrapolatedSlope = get_extrapolated_points(
-        Seven_points, LeftRight=LeftRight, nb_point_to_consider=20
+        Seven_points, step_us=tracking_step_us, LeftRight=LeftRight, nb_point_to_consider=20
     )
 
     if NewPointExtrapolated is None:
@@ -1814,7 +1814,7 @@ def process_side(Seven_points, Spectro, freqs, times, sr, LeftRight, max_amplitu
 
         #Get a new extrapolated point
         NewPointExtrapolated, NewPointExtrapolatedSlope = get_extrapolated_points(
-            Seven_points, LeftRight=LeftRight, nb_point_to_consider=20
+            Seven_points, step_us=tracking_step_us, LeftRight=LeftRight, nb_point_to_consider=20
         )
 
         if NewPointExtrapolated is None or NewPointExtrapolatedSlope is None:
@@ -1936,7 +1936,7 @@ def find_max_gauss_z(Seven_points, Spectro, freqs, times, sr, LeftRight, max_ste
 
         # Compute extrapolated point and its slope
         NewPointExtrapolated, NewPointExtrapolatedSlope = get_extrapolated_points(
-            Seven_points, step_ns=step, LeftRight=LeftRight, nb_point_to_consider=25
+            Seven_points, step_us=step, LeftRight=LeftRight, nb_point_to_consider=25
         )
 
 
@@ -2030,7 +2030,7 @@ def initial_call_trend_segmented(yt, sr, Max_Gauss_coordinate, step_ns=50):
 
     return results
 
-def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value):
+def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value, tracking_step_us=40.0):
     if curve_all is None:
         return None
 
@@ -2039,13 +2039,13 @@ def extend_trend_left(y_chun, sr, curve_all, S, freqs, times, max_value):
     #print('001')
     curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
     #print('002')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
     #print('003')
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
     #print('004')
     return curve_segmented
 
-def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value):
+def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value, tracking_step_us=40.0):
     if curve_all is None:
         return None
 
@@ -2053,9 +2053,9 @@ def extend_trend_right(y_chun, sr, curve_all, S, freqs, times, max_value):
 
     curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
 
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
 
-    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all)
+    curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
 
     return curve_segmented
 
@@ -2085,8 +2085,8 @@ def process_spectrum_segmented(y_use, sr, time_mid, duration):
   #print('Max_Gauss_coordinate')
   #print(Max_Gauss_coordinate)
   curve_segmented = initial_call_trend_segmented(y_chun, sr, Max_Gauss_coordinate)
-  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all)
-  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all)
+  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=0, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
+  curve_segmented = process_side(curve_segmented, S, freqs, times, sr, LeftRight=1, max_amplitude=max_value, Previous_Curve=curve_all, tracking_step_us=tracking_step_us)
 
 
   plot_spectrogram_with_points2(y_chun, sr, curve_segmented)
