@@ -281,6 +281,17 @@ def run_benchmark(
                 "detection_center_error_ms": m.center_error_ms,
                 "detection_frequency_error_khz": m.frequency_error_khz,
                 "candidate_time_mid_ms": float(cand["time_mid"]) * 1000.0,
+                "candidate_duration_ms": float(cand.get("duration", 0.0)) * 1000.0,
+                "reference_duration_ms": float(ref["t_ms"][-1] - ref["t_ms"][0]),
+                "candidate_reference_duration_ratio": (
+                    float(cand.get("duration", 0.0)) * 1000.0
+                    / max(float(ref["t_ms"][-1] - ref["t_ms"][0]), 1e-9)
+                ),
+                "peak_outside_reference_ms": max(
+                    float(ref["t_ms"][0]) - float(cand["time_mid"]) * 1000.0,
+                    float(cand["time_mid"]) * 1000.0 - float(ref["t_ms"][-1]),
+                    0.0,
+                ),
                 "candidate_peak_freq_khz": float(cand.get("peak_freq_hz", np.nan)) / 1000.0,
                 "detector_branch": cand.get("detector_branch", "legacy"),
             })
