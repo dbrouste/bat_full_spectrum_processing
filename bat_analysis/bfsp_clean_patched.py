@@ -1795,7 +1795,12 @@ def process_side(
     forced_stop_reason = None
     previous_Max_Gauss_coordinate = None  # Track previous Gaussian max coordinate
 
-    Max_Gauss_coordinate = point_along_line(NewPointExtrapolated, NewPointExtrapolatedSlope, Distance_from_max_gauss)
+    Max_Gauss_coordinate = point_along_line(
+        NewPointExtrapolated, NewPointExtrapolatedSlope, Distance_from_max_gauss
+    )
+    if Max_Gauss_coordinate is None:
+        _record_stop("initial_gaussian_point_invalid", points=Seven_points)
+        return Seven_points
     Gauss_y_value, Gauss_x_value = Max_Gauss_coordinate
     limit_Gauss_x_value = Gauss_x_value + 1 if LeftRight == 0 else Gauss_x_value - 1
 
