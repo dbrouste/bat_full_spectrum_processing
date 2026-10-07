@@ -307,6 +307,15 @@ def run_benchmark(
                 if supports_seed_freq and np.isfinite(seed):
                     model_kwargs["seed_freq_hz"] = seed
 
+                if "broad_fm_seed_freq_hz" in inspect.signature(module.process_full_spectrum).parameters:
+                    broad_seed = float(cand.get("broad_fm_seed_freq_hz", np.nan))
+                    if np.isfinite(broad_seed):
+                        model_kwargs["broad_fm_seed_freq_hz"] = broad_seed
+                        row["broad_fm_seed_used"] = True
+                        row["broad_fm_seed_khz"] = broad_seed / 1000.0
+                    else:
+                        row["broad_fm_seed_used"] = False
+
                 step_fn = getattr(module, "_adaptive_tracking_step_us", None)
                 if callable(step_fn):
                     row["tracking_step_us"] = float(
