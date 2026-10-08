@@ -34,3 +34,35 @@ Run `pytest -q tests/test_dual_ridge_hypotheses.py` in an environment with proje
 The 61 WAV / 149 annotated chirp reference set is not present in this branch. The benchmark runner and ground-truth dataset must be made available from the annotation branch/local working copy before quantitative comparison is possible. Preserve the frequency-aware matching and compare identical 116 TP detections, including the 7 >2 kHz error outliers and the remaining 109 chirps. Track median error, coverage, regression count, and processing time.
 
 Avoid developing a quality score or promoting dual hypothesis mode until those measurements are available.
+
+## Full benchmark command
+
+From the repository root with all 61 original WAV in their preserved subdirectories:
+
+```python
+from benchmark.runner import run_benchmark
+
+result = run_benchmark(
+    "bat_chirp_annotations.json",
+    "bat_analysis/modelling.py",
+    wav_root="wav",
+    detector_kwargs={"slope_filter_mode": "adaptive_v4"},
+    compare_hypotheses=True,
+)
+result.save_csv("results/dual_ridge")
+```
+
+Inspect `results/dual_ridge/benchmark_chirps.csv` for
+`median_abs_error_khz`, `coverage`, `hyp_peak_median_abs_error_khz`,
+`hyp_peak_coverage`, `hyp_coarse_median_abs_error_khz`,
+`hyp_coarse_coverage`, and both `hyp_*_model_success` flags.
+
+The optional comparison does **not** influence baseline matching or the
+normal output curve. It compares alternative seeds on the same matched
+detector candidate, using the raw `coarse_seed_freq_hz` when available.
+A missing coarse frequency yields a failed coarse hypothesis, not a new
+prediction. Compare paired results on exactly the same 116 TP matches.
+
+**Caution:** The 61-file benchmark has not been executed in this
+environment. Initial independent STFT diagnostics on the four problematic
+WAV are exploratory and are not the dual-ridge benchmark results.
