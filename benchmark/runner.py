@@ -138,6 +138,7 @@ def run_benchmark(
     detector_kwargs: Optional[dict[str, Any]] = None,
     min_iou: float = 0.05,
     max_center_error_ms: float = 4.0,
+    compare_hypotheses: bool = False,
     verbose: bool = True,
 ) -> BenchmarkResult:
     """Benchmark detection and curve modelling against validated annotations.
@@ -369,6 +370,41 @@ def run_benchmark(
                 )
                 metrics = compare_curves(ref["t_ms"], ref["f_khz"], pred_t, pred_f)
                 row.update(asdict(metrics))
+                if compare_hypotheses and hasattr(module, "compare_ridge_hypotheses"):
+                    # Independent A/B reconstruction; annotations are used only
+                    # afterwards for scoring, never as a seed or selection criterion.
+                    raw_coarse = cand.get("coarse_seed_freq_hz", np.nan)
+                    raw_slope = cand.get("coarse_seed_slope_hz_per_ms", np.nan)
+                    coarse_seed = float(raw_coarse) if raw_coarse is not None else np.nan
+                    coarse_slope = float(raw_slope) if raw_slope is not None else np.nan
+                    start_compare = time.perf_counter()
+                    variants = module.compare_ridge_hypotheses(
+                        y_filtered, sr, float(cand["time_mid"]), dur,
+                        seed_freq_hz=seed if np.isfinite(seed) else None,
+                        coarse_seed_freq_hz=coarse_seed if np.isfinite(coarse_seed) else None,
+                        coarse_seed_slope_hz_per_ms=coarse_slope if np.isfinite(coarse_slope) else None,
+                    )
+                    row["dual_comparison_time_s"] = time.perf_counter() - start_compare
+                    for name, variant in variants.items():
+                        prefix = "hyp_" + name + "_"
+                        row[prefix + "error"] = variant["error"] or ""
+                        curve_variant = variant["curve"]
+                        if curve_variant is None:
+                            row[prefix + "model_success"] = False
+                            continue
+                        try:
+                            ht, hf = _absolute_model_curve(
+                                curve_variant, float(cand["time_mid"]), file_duration_s
+                            )
+                            row.update({prefix + k: v for k, v in asdict(
+                                compare_curves(ref["t_ms"], ref["f_khz"], ht, hf)
+                            ).items()})
+                            row[prefix + "model_success"] = True
+                        except Exception as variant_error:
+                            row[prefix + "model_success"] = False
+                            row[prefix + "error"] = (
+                                f"{type(variant_error).__name__}: {variant_error}"
+                            )
                 row.update({
                     "model_success": True,
                     "failure_stage": "",
