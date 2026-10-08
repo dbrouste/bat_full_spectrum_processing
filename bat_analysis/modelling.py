@@ -171,6 +171,7 @@ def process_full_spectrum(
     broad_fm_seed_freq_hz: float | None = None,
     broad_fm_seed_slope_hz_per_ms: float | None = None,
     diagnostics: dict | None = None,
+    ridge_mode: str = "default",
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -180,6 +181,15 @@ def process_full_spectrum(
     globally strongest component. Omitting it preserves the previous no-gate
     behaviour.
     """
+    if ridge_mode not in {"default", "peak", "coarse"}:
+        raise ValueError("ridge_mode must be 'default', 'peak', or 'coarse'")
+    if ridge_mode == "peak":
+        broad_fm_seed_freq_hz = None
+        broad_fm_seed_slope_hz_per_ms = None
+    elif ridge_mode == "coarse":
+        if broad_fm_seed_freq_hz is None or not np.isfinite(broad_fm_seed_freq_hz):
+            raise ValueError("coarse mode requires a finite broad_fm_seed_freq_hz")
+
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
 
     if diagnostics is not None:
@@ -329,6 +339,35 @@ def process_full_spectrum(
         }
 
     return curve_all
+
+
+def compare_ridge_hypotheses(
+    y_use, sr, time_mid, duration, *, seed_freq_hz,
+    coarse_seed_freq_hz, coarse_seed_slope_hz_per_ms=None,
+):
+    """Run independent seed hypotheses; do not automatically choose a winner.
+
+    Returned curves use the same time/frequency coordinates as
+    process_full_spectrum. Ground-truth-free quality selection is intentionally
+    left out until a benchmark establishes a reliable criterion.
+    """
+    results = {}
+    for mode in ("peak", "coarse"):
+        details = {}
+        try:
+            curve = process_full_spectrum(
+                y_use, sr, time_mid, duration,
+                seed_freq_hz=seed_freq_hz,
+                broad_fm_seed_freq_hz=coarse_seed_freq_hz,
+                broad_fm_seed_slope_hz_per_ms=coarse_seed_slope_hz_per_ms,
+                diagnostics=details,
+                ridge_mode=mode,
+            )
+            results[mode] = {"curve": curve, "diagnostics": details, "error": None}
+        except Exception as exc:
+            results[mode] = {"curve": None, "diagnostics": details,
+                             "error": f"{type(exc).__name__}: {exc}"}
+    return results
 
 
 def fit_chirp_model(*args, **kwargs) -> ChirpModelResult:
