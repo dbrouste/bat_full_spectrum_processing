@@ -139,6 +139,10 @@ def run_benchmark(
     min_iou: float = 0.05,
     max_center_error_ms: float = 4.0,
     compare_hypotheses: bool = False,
+    target_chirps: dict[str, set[int]] | None = None,
+    matching_mode: str = "frequency_aware",
+    frequency_scale_khz: float = 10.0,
+    frequency_weight: float = 0.5,
     verbose: bool = True,
 ) -> BenchmarkResult:
     """Benchmark detection and curve modelling against validated annotations.
@@ -185,7 +189,7 @@ def run_benchmark(
         )
 
     for file_no, (relative_path, record) in enumerate(benchmark_records, start=1):
-        wav_path = root / relative_path
+        wav_path = root / Path(*relative_path.replace("\\", "/").split("/"))
         status = record.get("status")
         refs = _manual_chirps(record)
 
@@ -258,6 +262,10 @@ def run_benchmark(
         file_duration_s = len(y_filtered) / sr
 
         for i, ref in enumerate(refs):
+            if target_chirps is not None:
+                ids = target_chirps.get(Path(relative_path.replace("\\", "/")).name, set())
+                if ref["chirp_id"] not in ids:
+                    continue
             row: dict[str, Any] = {
                 "relative_path": relative_path,
                 "ground_truth_status": status,
