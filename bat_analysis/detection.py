@@ -216,7 +216,7 @@ def detect_candidates_snr_blobs(
     min_blob_height_hz: float = 5000.0,
     max_blob_slope_hz_per_ms: float = -2000.0,
     echo_suppression_window_ms: float = 10.0,
-    slope_filter_mode: str = "legacy",
+    slope_filter_mode: str = "adaptive_v4",
     lowfreq_max_hz: float = 45000.0,
     lowfreq_min_blob_height_hz: float = 2000.0,
     lowfreq_max_blob_slope_hz_per_ms: float = 0.0,
