@@ -152,15 +152,15 @@ from bat_analysis.detection import detect_chirps
 
 y, sr = sf.read("recording.wav")
 
-detections = detect_chirps(
-    y,
-    sr,
-    slope_filter_mode="adaptive_v4",
-)
+detections = detect_chirps(y, sr)  # adaptive_v4 by default
 
 for d in detections:
     print(d)
 ```
+
+`adaptive_v4` is the default detector mode when `slope_filter_mode` is omitted.
+For reproducible comparisons with earlier detectors, pass an explicit mode, e.g.
+`slope_filter_mode="legacy"`.
 
 ### Detector modes
 
