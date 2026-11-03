@@ -171,6 +171,9 @@ def process_full_spectrum(
     broad_fm_seed_freq_hz: float | None = None,
     broad_fm_seed_slope_hz_per_ms: float | None = None,
     diagnostics: dict | None = None,
+    tracking_method: str = "legacy",
+    reassignment_n_fft: int = 512,
+    reassignment_hop: int = 64,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -180,6 +183,33 @@ def process_full_spectrum(
     globally strongest component. Omitting it preserves the previous no-gate
     behaviour.
     """
+    if tracking_method not in ("legacy", "reassignment_flattop"):
+        raise ValueError("tracking_method must be 'legacy' or 'reassignment_flattop'")
+    if tracking_method == "reassignment_flattop":
+        from .reassignment_tracking import track_reassigned_ridge
+
+        if diagnostics is not None:
+            diagnostics.clear()
+        # Match the legacy return convention: times relative to the
+        # 15-ms chunk extracted around time_mid, not absolute WAV times.
+        chunk_start = max(0, int((time_mid - 0.0075) * sr)) / sr
+        curve = track_reassigned_ridge(
+            y_use, sr, time_mid=time_mid, duration=duration,
+            seed_freq_hz=(
+                broad_fm_seed_freq_hz
+                if broad_fm_seed_freq_hz is not None and np.isfinite(broad_fm_seed_freq_hz)
+                else seed_freq_hz
+            ),
+            n_fft=reassignment_n_fft, hop=reassignment_hop,
+            diagnostics=diagnostics,
+        )
+        if curve is not None:
+            curve[:, 0] -= chunk_start
+        elif diagnostics is not None:
+            diagnostics["model_success"] = False
+            diagnostics["final_points"] = 0
+        return curve
+
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
 
     if diagnostics is not None:
