@@ -45,3 +45,37 @@ Next benchmark against manual annotation: compare recall, precision,
 frequency/time errors and runtime for Hann adaptive_v4 vs Flattop reassignment
 512/1024; specifically inspect weak calls and crossing chirps before
 integrating reassigned blobs into candidate generation.
+
+## Experimental trajectory reconstruction
+
+`process_full_spectrum` now accepts `tracking_method="reassignment_flattop"`.
+The default remains `"legacy"`. The new mode replaces the **trajectory
+tracking stage**, not the SNR blob detector. It follows reassigned Flattop
+power in both directions from the supplied seed using a continuity-penalized
+local peak selector with a short gap allowance. It does not yet use the legacy
+Gaussian line-fit iterations, so these two reconstruction methods must be
+benchmarked independently. The result is a three-column array
+`[time_seconds, frequency_hz, normalized_amplitude]` in the same 15-ms
+chunk-relative temporal convention as the legacy model.
+
+```python
+from bat_analysis.modelling import process_full_spectrum
+
+diagnostics = {}
+curve = process_full_spectrum(
+    y, sr,
+    time_mid=candidate["time_mid"],
+    duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    broad_fm_seed_freq_hz=candidate.get("broad_fm_seed_freq_hz"),
+    tracking_method="reassignment_flattop",
+    reassignment_n_fft=512,
+    reassignment_hop=64,
+    diagnostics=diagnostics,
+)
+```
+
+Limitations: when the seed is incorrect or separated harmonics overlap, the
+greedy path can jump or stop. Reassigned power is sparse and is not a Gaussian
+amplitude measure; curve amplitudes are normalized. No claim of improved
+accuracy is made before testing against manually annotated WAV files.
