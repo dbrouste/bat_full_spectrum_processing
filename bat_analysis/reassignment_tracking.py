@@ -1,7 +1,7 @@
 """Experimental ridge tracking on a Flattop reassigned spectrogram.
 
 Independent from the Gaussian legacy tracker. The path is extracted with a
-seed-constrained dynamic program, not with independent column-wise maxima.
+seed-constrained, continuity-penalized tracking rather than independent column maxima.
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def track_reassigned_ridge(y, sr, *, time_mid, duration,
     anchor_r, anchor_c = int(seed_rows[seed[0]]), int(seed_cols[seed[1]])
 
     step_bins = max(1, int(np.ceil(max_step_hz / (sr/n_fft))))
-    # Track in both directions from one anchor. Bridges up to max_gap_frames
+    # Greedy continuity-penalized tracking in both directions. Bridges up to max_gap_frames
     # missing columns; no unrelated components can start new paths.
     points = [(anchor_c, anchor_r)]
     for direction in (-1, 1):
