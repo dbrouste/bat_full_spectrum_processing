@@ -20,7 +20,7 @@ from bat_analysis.reassignment_tracking import track_reassigned_ridge
 def evaluate(
     annotation_file, wav_dir, *, max_per_file=None,
     n_fft=512, hop=24, jump_penalty=0.11, gap_penalty=0.65,
-    refine_endpoints=True,
+    refine_endpoints=True, complete_ends=True, peak_anchored_window=False,
     jitter_time_ms=0.0, jitter_freq_khz=0.0, jitter_duration_fraction=0.0,
     random_seed=20261104,
 ):
@@ -62,6 +62,8 @@ def evaluate(
                 seed_freq_hz=seed, n_fft=n_fft, hop=hop,
                 jump_penalty=jump_penalty, gap_penalty=gap_penalty,
                 refine_endpoints=refine_endpoints,
+                complete_ends=complete_ends,
+                peak_anchored_window=peak_anchored_window,
             )
             record_result = {"wav": wav_name, "chirp_id": chirp.get("chirp_id"),
                              "tracked": curve is not None}
@@ -120,6 +122,8 @@ def main():
     p.add_argument("--hop", type=int, default=24)
     p.add_argument("--jump-penalty", type=float, default=0.11)
     p.add_argument("--no-endpoint-refinement", action="store_true")
+    p.add_argument("--no-completion", action="store_true")
+    p.add_argument("--peak-anchored-window", action="store_true")
     p.add_argument("--gap-penalty", type=float, default=0.65)
     p.add_argument("--jitter-time-ms", type=float, default=0.0)
     p.add_argument("--jitter-freq-khz", type=float, default=0.0)
@@ -130,6 +134,8 @@ def main():
         args.annotations, args.wav_dir, max_per_file=args.max_per_file,
         n_fft=args.n_fft, hop=args.hop, jump_penalty=args.jump_penalty,
         refine_endpoints=not args.no_endpoint_refinement,
+        complete_ends=not args.no_completion,
+        peak_anchored_window=args.peak_anchored_window,
         gap_penalty=args.gap_penalty, jitter_time_ms=args.jitter_time_ms,
         jitter_freq_khz=args.jitter_freq_khz,
         jitter_duration_fraction=args.jitter_duration_fraction,
