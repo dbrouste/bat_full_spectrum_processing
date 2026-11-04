@@ -9,9 +9,28 @@ from scipy.ndimage import gaussian_filter
 from .reassignment import reassigned_spectrogram
 
 
+def choose_reassignment_resolution(duration_s, n_fft=None, hop=None):
+    """Select temporal resolution for steep sub-millisecond chirps.
+
+    Explicit n_fft/hop values override automatic selection. The 1.2 ms
+    boundary is experimental and should be benchmarked on additional WAVs.
+    """
+    if not np.isfinite(duration_s) or duration_s <= 0:
+        raise ValueError("duration_s must be positive and finite")
+    if n_fft is None:
+        n_fft = 192 if duration_s < 0.0012 else 512
+    n_fft = int(n_fft)
+    if hop is None:
+        hop = 16 if n_fft <= 256 else 24
+    hop = int(hop)
+    if n_fft < 32 or hop < 1 or hop > n_fft:
+        raise ValueError("invalid FFT size or hop")
+    return n_fft, hop
+
+
 def track_reassigned_ridge(
     y, sr, *, time_mid, duration, seed_freq_hz=None,
-    n_fft=512, hop=24, search_margin_ms=1.0,
+    n_fft=None, hop=None, search_margin_ms=1.0,
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
     subbin_refine=True, anchor_time_radius_ms=0.5,
@@ -23,8 +42,9 @@ def track_reassigned_ridge(
     chirp is non-increasing in frequency. No annotations are used at inference.
     Input time_mid and duration are in seconds.
     """
-    if duration <= 0 or sr <= 0 or n_fft < 32 or hop < 1 or hop > n_fft:
-        raise ValueError("invalid sample rate, duration or STFT configuration")
+    n_fft, hop = choose_reassignment_resolution(duration, n_fft, hop)
+    if sr <= 0:
+        raise ValueError("invalid sample rate")
     if jump_penalty < 0 or gap_penalty < 0:
         raise ValueError("penalties must be nonnegative")
     if max_step_hz is not None and max_step_hz <= 0:
