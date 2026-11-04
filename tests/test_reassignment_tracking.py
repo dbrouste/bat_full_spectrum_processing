@@ -5,6 +5,26 @@ from bat_analysis.reassignment_tracking import track_reassigned_ridge
 from bat_analysis.modelling import process_full_spectrum
 
 
+def test_modelling_defaults_to_reassignment_flattop(monkeypatch):
+    called = []
+
+    def fake_tracker(*args, **kwargs):
+        called.append(kwargs["time_mid"])
+        return np.array([[0.010, 45000.0, 0.5], [0.011, 43000.0, 0.4]])
+
+    monkeypatch.setattr(
+        "bat_analysis.reassignment_tracking.track_reassigned_ridge",
+        fake_tracker,
+    )
+    result = process_full_spectrum(
+        np.zeros(8000), 384000, time_mid=0.010, duration=0.004,
+        seed_freq_hz=45000.0,
+    )
+    assert called == [0.010]
+    assert result.shape == (2, 3)
+    np.testing.assert_allclose(result[:, 0], [0.0075, 0.0085])
+
+
 def test_reassignment_tracks_downward_sweep():
     sr = 384000
     t = np.arange(int(0.020 * sr)) / sr
@@ -22,7 +42,7 @@ def test_reassignment_tracks_downward_sweep():
     assert np.all((r[:,2] >= 0) & (r[:,2] <= 1 + 1e-10))
 
 
-def test_modelling_new_opt_in_mode():
+def test_modelling_explicit_reassignment_mode():
     sr = 384000
     t = np.arange(int(.02 * sr)) / sr
     x = np.sin(2*np.pi*(85000*t - 2e6*t*t))
