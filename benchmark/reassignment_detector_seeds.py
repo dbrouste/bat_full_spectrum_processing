@@ -72,7 +72,8 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
 
 
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
-             max_per_file=None, use_broad_seed=True, evaluate_harmonics=False):
+             max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
+             complete_ends=True):
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
     per_file = []
     details = []
@@ -106,6 +107,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                 curve = track_reassigned_candidate(
                     y, int(sr), candidate,
                     n_fft=n_fft, hop=hop, use_broad_seed=use_broad_seed,
+                    complete_ends=complete_ends,
                     diagnostics=diag,
                 )
             except Exception as e:
@@ -178,6 +180,7 @@ def main():
     parser.add_argument("--n-fft", type=int, default=None)
     parser.add_argument("--hop", type=int, default=None)
     parser.add_argument("--no-broad-seed", action="store_true")
+    parser.add_argument("--no-completion", action="store_true")
     parser.add_argument("--harmonics", action="store_true",
                         help="Report secondary harmonic segments linked to V4 candidates")
     parser.add_argument("--output", default=None,
@@ -186,7 +189,8 @@ def main():
     result = evaluate(
         args.annotations, args.wav_dir, n_fft=args.n_fft, hop=args.hop,
         max_per_file=args.max_per_file, use_broad_seed=not args.no_broad_seed,
-        evaluate_harmonics=args.harmonics
+        evaluate_harmonics=args.harmonics,
+        complete_ends=not args.no_completion
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:
