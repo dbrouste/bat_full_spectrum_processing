@@ -14,7 +14,7 @@ def track_reassigned_ridge(
     n_fft=512, hop=24, search_margin_ms=1.0,
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
-    diagnostics=None,
+    subbin_refine=True, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -158,12 +158,28 @@ def track_reassigned_ridge(
         if diagnostics is not None:
             diagnostics.update({"model_success": False, "stop_reason": "too_short"})
         return None
+    # The reassigned image is already concentrated around the ridge.
+    # Refine the FFT-cell centre with its original (unsmoothed) power in a
+    # bounded +/-3-bin neighborhood. A Gaussian proximity kernel stops a
+    # distant harmonic pulling the centroid away from the selected path.
+    ridge_frequencies = freqs[row_idx].astype(float).copy()
+    if subbin_refine:
+        for j, (ri, ci) in enumerate(zip(row_idx, col_idx)):
+            neighbors = np.arange(max(0, ri - 3), min(rows, ri + 4))
+            weights = np.maximum(0.0, reassigned[neighbors, ci]) * np.exp(
+                -0.5 * ((neighbors - ri) / 2.25) ** 2
+            )
+            if np.sum(weights) > 1e-30:
+                ridge_frequencies[j] = float(
+                    np.dot(freqs[neighbors], weights) / np.sum(weights)
+                )
     amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
-    curve = np.column_stack([t[col_idx], freqs[row_idx], amplitude])
+    curve = np.column_stack([t[col_idx], ridge_frequencies, amplitude])
     if diagnostics is not None:
         diagnostics.update({
             "tracking_method": "reassignment_flattop",
             "tracking_algorithm": "second_order_global_dp",
+            "subbin_refine": bool(subbin_refine),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
             "reassignment_valid_fraction": r["valid_fraction"],
