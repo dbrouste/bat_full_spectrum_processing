@@ -14,7 +14,8 @@ def track_reassigned_ridge(
     n_fft=512, hop=24, search_margin_ms=1.0,
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
-    subbin_refine=True, diagnostics=None,
+    subbin_refine=True, anchor_time_radius_ms=0.5,
+    anchor_freq_radius_khz=12.0, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -28,6 +29,8 @@ def track_reassigned_ridge(
         raise ValueError("penalties must be nonnegative")
     if max_step_hz is not None and max_step_hz <= 0:
         raise ValueError("max_step_hz must be positive")
+    if anchor_time_radius_ms <= 0 or anchor_freq_radius_khz <= 0:
+        raise ValueError("anchor radii must be positive")
     y = np.asarray(y, dtype=float)
     if y.ndim != 1 or not np.isfinite(y).all():
         raise ValueError("expected finite mono audio")
@@ -69,9 +72,13 @@ def track_reassigned_ridge(
     ) / 32
     evidence[snr < 2] *= 0.3
 
-    time_candidates = np.flatnonzero(abs(t - time_mid) <= 0.0015)
+    time_candidates = np.flatnonzero(
+        abs(t - time_mid) <= max(anchor_time_radius_ms / 1000.0, hop / (2 * sr))
+    )
     if seed_freq_hz is not None and np.isfinite(seed_freq_hz):
-        freq_candidates = np.flatnonzero(abs(freqs - seed_freq_hz) <= 12000)
+        freq_candidates = np.flatnonzero(
+            abs(freqs - seed_freq_hz) <= anchor_freq_radius_khz * 1000.0
+        )
     else:
         freq_candidates = np.arange(len(freqs))
     if not len(time_candidates) or not len(freq_candidates):
@@ -182,6 +189,11 @@ def track_reassigned_ridge(
             "subbin_refine": bool(subbin_refine),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
+            "anchor_time_offset_ms": float((t[anchor_col] - time_mid) * 1000.0),
+            "anchor_freq_offset_khz": (
+                float((freqs[anchor_row] - seed_freq_hz) / 1000.0)
+                if seed_freq_hz is not None and np.isfinite(seed_freq_hz) else None
+            ),
             "reassignment_valid_fraction": r["valid_fraction"],
             "model_success": True,
             "final_points": int(len(curve)),
