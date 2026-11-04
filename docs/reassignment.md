@@ -437,7 +437,7 @@ A spectrogram screenshot showed three fitted points close to the trailing
 part of a conspicuous diagonal FM trace, without its earlier section.
 Two independent issues were identified:
 
-1. The detector's \`time_mid\` is its strongest-energy bin, **not** the
+1. The detector's `time_mid` is its strongest-energy bin, **not** the
    temporal midpoint of the call. The old centered duration window could
    omit the left side before tracking had even started.
 2. The global tracker can end a path when local evidence becomes sparse.
@@ -445,12 +445,12 @@ Two independent issues were identified:
 ### Energy-peak-aligned analysis window
 
 When no detector bbox is supplied, the experimental
-\`process_full_spectrum\` entry point now uses an **asymmetric search window**:
-\`[peak_time - 1.15 * duration, peak_time + 0.85 * duration]\`.
-When the detector provides actual \`t_start\` and \`t_end\`,
+`process_full_spectrum` entry point now uses an **asymmetric search window**:
+`[peak_time - 1.15 * duration, peak_time + 0.85 * duration]`.
+When the detector provides actual `t_start` and `t_end`,
 those bounds take precedence. The direct low-level
-\`track_reassigned_ridge\` API retains a centered window unless
-\`peak_anchored_window=True\` is passed.
+`track_reassigned_ridge` API retains a centered window unless
+`peak_anchored_window=True` is passed.
 
 The location of the strongest Flattop-STFT energy was checked within 131
 manual chirp intervals of at least 0.6 ms on the four uploaded WAVs.
@@ -463,7 +463,7 @@ or ridge accuracy benchmark**.
 
 ### High-confidence predictive completion
 
-\`bat_analysis/ridge_completion.py\` fits an initial local slope at the
+`bat_analysis/ridge_completion.py` fits an initial local slope at the
 observed ridge's edge and extrapolates the frequency for the next
 STFT frame. It accepts a proposed point only if a Flattop STFT
 within a 10 kHz search band provides sufficiently strong noise-relative
@@ -478,10 +478,10 @@ Experimental defaults:
 - Search radius: **10 kHz**, frequency-prior penalty: **0.14**.
 - Maximum extension per side: **5 ms**.
 - Original ridge samples remain exactly unchanged.
-- \`complete_ends=True\` in the experimental tracker and
-  \`reassignment_complete_ends=True\` in its modelling wrapper.
+- `complete_ends=True` in the experimental tracker and
+  `reassignment_complete_ends=True` in its modelling wrapper.
 
-The completion is separate from \`refine_ridge_endpoint\`, the existing
+The completion is separate from `refine_ridge_endpoint`, the existing
 frequency-only tail plateau correction. It runs **before** that correction.
 
 ### Local validation (separate from the end-to-end benchmark)
@@ -509,7 +509,7 @@ dedicated evaluation. The added STFT has a runtime cost.
 
 ### Reproducible A/B
 
-\`\`\`python
+```python
 from bat_analysis.modelling import process_full_spectrum
 
 ridge = process_full_spectrum(
@@ -520,19 +520,19 @@ ridge = process_full_spectrum(
     reassignment_peak_anchored_window=True,
     reassignment_complete_ends=True,
 )
-\`\`\`
+```
 
 To compare against the old experimental mode, pass
-\`reassignment_complete_ends=False\` and
-\`reassignment_peak_anchored_window=False\`. Prefer providing the
-detector's original \`chirp_start_s\`/\`chirp_end_s\` when known.
+`reassignment_complete_ends=False` and
+`reassignment_peak_anchored_window=False`. Prefer providing the
+detector's original `chirp_start_s`/`chirp_end_s` when known.
 
-\`\`\`bash
+```bash
 python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs
 python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs --no-completion
 python -m benchmark.reassignment_detector_seeds Nycto-Thomas.json /path/to/wavs
 python -m benchmark.reassignment_detector_seeds Nycto-Thomas.json /path/to/wavs --no-completion
-\`\`\`
+```
 
 The documented evaluations above used an isolated implementation of
 the added completion algorithm with the WAVs. The complete repository
