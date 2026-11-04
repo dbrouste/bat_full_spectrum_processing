@@ -276,3 +276,51 @@ frequency is passed to the tracker during this benchmark.
 All these changes remain on the `Reassignment` branch. The main branch
 and default legacy tracker are unmodified. GitHub CI execution is still
 pending verification.
+
+## Cross-seed slope continuity
+
+The global dynamic program previously optimized left and right sides of a
+ridge independently. Near a crossing harmonic, the right-hand side could
+select a spuriously flat, high-energy branch despite a steep left-hand
+approach. The left-hand slope is now summarized over its final eight
+time-ordered points and supplied as a **soft prior** for the first
+0.55 ms of rightward tracking.
+
+Defaults:
+- `cross_seed_velocity_penalty=0.6`
+- `cross_seed_position_penalty=0.01`
+- `prior_horizon_ms=0.55`
+
+This is not a hard global straight-line assumption: the prior expires,
+and the dynamic program remains free to select chirp curvature. Both
+penalties can be set to zero to reproduce the previous behavior.
+
+### Incremental local validation
+
+The final configuration (automatic 192/16 below 1.2 ms; otherwise
+512/24, +/-0.5 ms anchoring and the new cross-seed slope prior) was
+tested against the same four WAVs and manual PCHIP curves:
+
+| Measurement | Before cross-seed prior | After |
+|---|---:|---:|
+| Oracle seeded: mean full-interval error, 140 calls | 1.18 kHz | 1.07 kHz |
+| Oracle seeded: mean full-interval error, 41 hold-out calls | 1.00 kHz | 1.01 kHz |
+| Detector-proxy seeded: mean full-interval error, 83 matched calls | 1.14 kHz | 1.10 kHz |
+| Negative windows returning a track, 100 sampled windows | 2 | 2 |
+
+All 140 oracle-seeded calls and all 83 matched proxy-detector calls
+produced a path. These results use a local implementation of the
+reassignment formulas and a close reproduction of the V4 detector
+where stated; the exact installed GitHub pipeline still needs its
+CI/integration benchmark run. Error can vary with the matching
+tolerance; unmatched candidates are listed separately.
+
+One notably incorrect call, `20261005_191947.wav` chirp #37,
+improved from approximately 7 kHz mean error to around 1 kHz
+when the seed's approach slope was carried through the transition.
+This is a diagnostic example, not evidence of generalized recovery
+of overlapping harmonics.
+
+The small ~0.01 kHz degradation on the 41-call validation group
+means this prior needs evaluation on additional independent WAV
+recordings before it can replace the baseline in `main`.
