@@ -34,7 +34,7 @@ def track_reassigned_ridge(
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
     subbin_refine=True, anchor_time_radius_ms=0.5,
-    anchor_freq_radius_khz=12.0, diagnostics=None,
+    anchor_freq_radius_khz=12.0, time_bounds_s=None, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -54,8 +54,17 @@ def track_reassigned_ridge(
     y = np.asarray(y, dtype=float)
     if y.ndim != 1 or not np.isfinite(y).all():
         raise ValueError("expected finite mono audio")
-    start = max(0.0, time_mid - duration / 2 - search_margin_ms / 1000)
-    stop = min(len(y) / sr, time_mid + duration / 2 + search_margin_ms / 1000)
+    if time_bounds_s is None:
+        start = time_mid - duration / 2
+        stop = time_mid + duration / 2
+    else:
+        if len(time_bounds_s) != 2:
+            raise ValueError("time_bounds_s must be (start_s, end_s)")
+        start, stop = (float(time_bounds_s[0]), float(time_bounds_s[1]))
+        if not np.isfinite([start, stop]).all() or start >= stop:
+            raise ValueError("invalid time_bounds_s")
+    start = max(0.0, start - search_margin_ms / 1000)
+    stop = min(len(y) / sr, stop + search_margin_ms / 1000)
     first = max(0, int(start * sr) - n_fft)
     last = min(len(y), int(stop * sr) + n_fft)
     if last - first < n_fft:
@@ -219,3 +228,37 @@ def track_reassigned_ridge(
             "final_points": int(len(curve)),
         })
     return curve
+
+
+def track_reassigned_candidate(y, sr, candidate: dict, *, use_broad_seed=True,
+                               diagnostics=None, **kwargs):
+    """Track directly from a detector candidate using its true time bounds.
+
+    Adaptive V4 reports `time_mid` at its strongest peak, not necessarily
+    the middle of the chirp. Use the *bbox* to set the analysis limits, while
+    keeping the peak time and peak frequency together as the seed. When a
+    valid coarse broad-FM seed is present, use its own matched time coordinate.
+    """
+    seed_time = float(candidate["time_mid"])
+    seed_freq = float(candidate["peak_freq_hz"])
+    if use_broad_seed:
+        coarse_freq = candidate.get("broad_fm_seed_freq_hz")
+        coarse_time = candidate.get("coarse_seed_time_s")
+        if (coarse_freq is not None and coarse_time is not None
+                and np.isfinite(coarse_freq) and np.isfinite(coarse_time)):
+            seed_time = float(coarse_time)
+            seed_freq = float(coarse_freq)
+    bounds = None
+    if candidate.get("t_start") is not None and candidate.get("t_end") is not None:
+        a, b = float(candidate["t_start"]), float(candidate["t_end"])
+        if np.isfinite([a, b]).all() and a < b:
+            bounds = (a, b)
+    return track_reassigned_ridge(
+        y, sr,
+        time_mid=seed_time,
+        duration=float(candidate["duration"]),
+        seed_freq_hz=seed_freq,
+        time_bounds_s=bounds,
+        diagnostics=diagnostics,
+        **kwargs,
+    )
