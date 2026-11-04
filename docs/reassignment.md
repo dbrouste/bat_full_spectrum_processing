@@ -324,3 +324,109 @@ of overlapping harmonics.
 The small ~0.01 kHz degradation on the 41-call validation group
 means this prior needs evaluation on additional independent WAV
 recordings before it can replace the baseline in `main`.
+
+## Experimental second-harmonic recovery and observed-tail correction
+
+**Opt-in to experimental ridge tracking**, `tracking_method="reassignment_flattop"`.
+The main branch and the default legacy tracker are unchanged.
+
+### Fundamental tracking and tail correction
+
+The experimental tracker now calls `refine_ridge_endpoint` by default.
+It fits the declining FM slope on the first 65% of the *observed*
+trajectory, anchors a linear continuation at the splice, and limits
+anomalously flat, high-frequency tail points to the continuation.
+The correction is bounded to 16 kHz, does not modify timestamps or
+amplitudes and **never extrapolates a missing time interval**.
+It is disabled for CF and upward-sloping calls. The helper also
+returns observed endpoint amplitude diagnostics.
+
+To compare old versus new:
+
+```python
+raw = process_full_spectrum(
+    y, sr, time_mid=candidate["time_mid"], duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    tracking_method="reassignment_flattop",
+    reassignment_refine_endpoints=False,
+)
+corrected = process_full_spectrum(
+    y, sr, time_mid=candidate["time_mid"], duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    tracking_method="reassignment_flattop",
+    reassignment_refine_endpoints=True,
+)
+```
+
+Local prototype evaluation with oracle seeds on the 140 validated
+manual chirps, errors computed at 101 uniformly sampled annotation times:
+
+| Mean absolute frequency error | Before | After |
+|---|---:|---:|
+| All 140 manual calls | 1.059 kHz | 0.984 kHz |
+| 41 manual calls held aside for validation | 0.996 kHz | 0.963 kHz |
+| Last third of each call | 1.434 kHz | 1.210 kHz |
+
+The improvement applies only to measured points; the shortfall of
+temporal coverage is unchanged. The annotations were used for seed
+initialization in this experiment, not in the inference algorithm.
+
+### Second-harmonic candidate retrieval
+
+After obtaining a fundamental from an Adaptive V4 candidate, call:
+
+```python
+from bat_analysis.detection import detect_candidates_snr_blobs
+from bat_analysis.harmonics import track_candidate_with_harmonics
+
+candidates = detect_candidates_snr_blobs(y, sr)
+for index, candidate in enumerate(candidates):
+    fundamental, harmonics = track_candidate_with_harmonics(
+        y, sr, candidate, parent_id=index,
+    )
+    for harmonic in harmonics:
+        print(harmonic.harmonic_order, harmonic.parent_id,
+              harmonic.points, harmonic.mean_snr_db)
+```
+
+The harmonic helper uses Flattop FFT 192 / hop 12, searches near
+`2*f_fundamental(t)` with up to 20 kHz of tolerance, and requires a
+short coherent segment with a 4-16 dB compatible SNR-style threshold
+(local detection threshold 8 dB; mean raw SNR at least 14 dB).
+It reports real observed time, frequency and local SNR points.
+The first coherent segment is preferred to later echo-like segments.
+The parent's `parent_id` is retained and an associated harmonic
+must **not** be counted as an independent bat passage.
+
+In a local prototype evaluation of the 14 manually labelled second
+harmonics in `20261005_191947.wav`, all 14 had overlapping detected
+harmonic segments when the fundamental ridge was oracle seeded.
+The mean frequency error inside each annotated harmonic span was
+approximately 1.66 kHz. Three additional candidates were found
+around fundamentals without an annotated second harmonic; these
+are **unreviewed proposals**, not confirmed false positives.
+A synthetic negative check with 40 noise seeds and fundamental-only
+calls returned zero proposed harmonics; 40 synthetic positive cases
+returned one segment each. Synthetic checks do not measure specificity
+on environmental field noise.
+
+### Reproducible benchmarks
+
+```bash
+# Oracle-seeded tracker A/B on the annotations.
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs \
+  --no-endpoint-refinement
+
+# Matched harmonic pairs and parent endpoint errors.
+python -m benchmark.harmonic_annotations Nycto-Thomas.json /path/to/wavs
+
+# Exact V4 candidates instead of manual seeds.
+python -m benchmark.reassignment_detector_seeds \
+  Nycto-Thomas.json /path/to/wavs
+```
+
+The automated detector can still miss fundamentals and the harmonic
+algorithm cannot recover a missing parent call without another seed.
+The exact integrated repository suite and CI checks are pending and
+should be run before replacing production defaults.
