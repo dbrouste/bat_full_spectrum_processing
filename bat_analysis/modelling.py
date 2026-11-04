@@ -171,7 +171,7 @@ def process_full_spectrum(
     broad_fm_seed_freq_hz: float | None = None,
     broad_fm_seed_slope_hz_per_ms: float | None = None,
     diagnostics: dict | None = None,
-    tracking_method: str = "legacy",
+    tracking_method: str = "reassignment_flattop",
     reassignment_n_fft: int | None = None,
     reassignment_hop: int | None = None,
     reassignment_subbin_refine: bool = True,
