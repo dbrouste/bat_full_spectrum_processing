@@ -132,3 +132,29 @@ def test_seed_radius_and_bounds_in_diagnostics():
     assert abs(diag["anchor_time_offset_ms"]) <= 0.5 + 1e-6
     assert diag["reassignment_n_fft"] == 512
     assert diag["reassignment_hop"] == 24
+
+
+def test_modelling_uses_coarse_time_only_with_its_frequency(monkeypatch):
+    from bat_analysis import reassignment_tracking as trk
+    seen = []
+    def fake(y, sr, **kwargs):
+        seen.append(kwargs)
+        return np.array([[0.0105, 100000.0, 0.8],
+                         [0.0110, 90000.0, 0.7],
+                         [0.0115, 80000.0, 0.5]])
+    monkeypatch.setattr(trk, "track_reassigned_ridge", fake)
+    signal = np.zeros(10000)
+    common = dict(time_mid=.011, duration=.003, seed_freq_hz=92000.,
+                  broad_fm_seed_freq_hz=108000.,
+                  chirp_start_s=.009, chirp_end_s=.013,
+                  tracking_method="reassignment_flattop")
+    process_full_spectrum(
+        signal, 384000, **common,
+        broad_fm_seed_time_s=.0104,
+    )
+    assert seen[-1]["time_mid"] == .0104
+    assert seen[-1]["seed_freq_hz"] == 108000.
+    assert seen[-1]["time_bounds_s"] == (.009, .013)
+    process_full_spectrum(signal, 384000, **common)
+    assert seen[-1]["time_mid"] == .011
+    assert seen[-1]["seed_freq_hz"] == 92000.
