@@ -36,7 +36,8 @@ def track_reassigned_ridge(
     subbin_refine=True, anchor_time_radius_ms=0.5,
     anchor_freq_radius_khz=12.0, time_bounds_s=None,
     cross_seed_velocity_penalty=0.6, cross_seed_position_penalty=0.01,
-    prior_horizon_ms=0.55, diagnostics=None,
+    prior_horizon_ms=0.55, refine_endpoints=True,
+    endpoint_tail_fraction=0.35, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -242,6 +243,13 @@ def track_reassigned_ridge(
                 )
     amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
     curve = np.column_stack([t[col_idx], ridge_frequencies, amplitude])
+    endpoint_diag = None
+    if refine_endpoints:
+        from .endpoint_refinement import refine_ridge_endpoint
+        curve, endpoint_diag = refine_ridge_endpoint(
+            curve, tail_fraction=endpoint_tail_fraction,
+            return_diagnostics=True,
+        )
     if diagnostics is not None:
         diagnostics.update({
             "tracking_method": "reassignment_flattop",
@@ -249,6 +257,8 @@ def track_reassigned_ridge(
             "cross_seed_velocity_bins_per_frame": prior_velocity,
             "cross_seed_position_penalty": float(cross_seed_position_penalty),
             "subbin_refine": bool(subbin_refine),
+            "endpoint_refinement": endpoint_diag,
+            "refine_endpoints": bool(refine_endpoints),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
             "anchor_time_offset_ms": float((t[anchor_col] - time_mid) * 1000.0),
