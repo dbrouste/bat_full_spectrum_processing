@@ -174,6 +174,7 @@ def process_full_spectrum(
     tracking_method: str = "legacy",
     reassignment_n_fft: int = 512,
     reassignment_hop: int = 24,
+    reassignment_subbin_refine: bool = True,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -201,7 +202,7 @@ def process_full_spectrum(
                 else seed_freq_hz
             ),
             n_fft=reassignment_n_fft, hop=reassignment_hop,
-            diagnostics=diagnostics,
+            subbin_refine=reassignment_subbin_refine, diagnostics=diagnostics,
         )
         if curve is not None:
             curve[:, 0] -= chunk_start
