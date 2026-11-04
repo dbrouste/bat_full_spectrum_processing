@@ -37,7 +37,9 @@ def track_reassigned_ridge(
     anchor_freq_radius_khz=12.0, time_bounds_s=None,
     cross_seed_velocity_penalty=0.6, cross_seed_position_penalty=0.01,
     prior_horizon_ms=0.55, refine_endpoints=True,
-    endpoint_tail_fraction=0.35, diagnostics=None,
+    endpoint_tail_fraction=0.35, complete_ends=True,
+    extension_min_snr_db=17.0, peak_anchored_window=False,
+    diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -52,6 +54,8 @@ def track_reassigned_ridge(
         raise ValueError("penalties must be nonnegative")
     if max_step_hz is not None and max_step_hz <= 0:
         raise ValueError("max_step_hz must be positive")
+    if extension_min_snr_db < 0:
+        raise ValueError("extension_min_snr_db must be nonnegative")
     if anchor_time_radius_ms <= 0 or anchor_freq_radius_khz <= 0:
         raise ValueError("anchor radii must be positive")
     if (cross_seed_velocity_penalty < 0 or cross_seed_position_penalty < 0
@@ -61,8 +65,14 @@ def track_reassigned_ridge(
     if y.ndim != 1 or not np.isfinite(y).all():
         raise ValueError("expected finite mono audio")
     if time_bounds_s is None:
-        start = time_mid - duration / 2
-        stop = time_mid + duration / 2
+        if peak_anchored_window:
+            # V4 time_mid is the ENERGY PEAK, not the bbox centre.
+            # Descending FM calls frequently peak close to their end.
+            start = time_mid - 1.15 * duration
+            stop = time_mid + 0.85 * duration
+        else:
+            start = time_mid - duration / 2
+            stop = time_mid + duration / 2
     else:
         if len(time_bounds_s) != 2:
             raise ValueError("time_bounds_s must be (start_s, end_s)")
@@ -243,6 +253,15 @@ def track_reassigned_ridge(
                 )
     amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
     curve = np.column_stack([t[col_idx], ridge_frequencies, amplitude])
+    completion_diag = None
+    if complete_ends and len(curve) >= 3:
+        from .ridge_completion import extend_ridge_edges
+        curve, completion_diag = extend_ridge_edges(
+            y, sr, curve, bounds_s=(start, stop),
+            n_fft=n_fft, hop=hop,
+            min_snr_db=extension_min_snr_db,
+            return_diagnostics=True,
+        )
     endpoint_diag = None
     if refine_endpoints:
         from .endpoint_refinement import refine_ridge_endpoint
@@ -258,6 +277,9 @@ def track_reassigned_ridge(
             "cross_seed_position_penalty": float(cross_seed_position_penalty),
             "subbin_refine": bool(subbin_refine),
             "endpoint_refinement": endpoint_diag,
+            "ridge_completion": completion_diag,
+            "complete_ends": bool(complete_ends),
+            "peak_anchored_window": bool(peak_anchored_window),
             "refine_endpoints": bool(refine_endpoints),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
