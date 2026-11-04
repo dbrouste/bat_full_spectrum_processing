@@ -79,3 +79,50 @@ Limitations: when the seed is incorrect or separated harmonics overlap, the
 greedy path can jump or stop. Reassigned power is sparse and is not a Gaussian
 amplitude measure; curve amplitudes are normalized. No claim of improved
 accuracy is made before testing against manually annotated WAV files.
+
+## Global trajectory tracker (second iteration)
+
+The former greedy ridge follower is replaced by a second-order dynamic
+program with two states: frequency bin and frequency change per frame.
+Negative/zero frequency slope (forward in time) is enforced, and changes in
+slope are penalized. The evidence map blends smoothed reassigned power (65%)
+and regular Flattop STFT power (35%) after per-frequency noise subtraction.
+This reduces jumps between disconnected reassigned pixels.
+
+The optional entry point remains:
+
+```python
+curve = process_full_spectrum(
+    y, sr, time_mid=candidate["time_mid"], duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    tracking_method="reassignment_flattop",
+    reassignment_n_fft=512, reassignment_hop=48,
+)
+```
+
+**Important:** the preceding example uses the detector's seed. The available
+manual-label benchmark is *oracle seeded*, meaning seed time and seed frequency
+are computed from manual chirp annotations, not from the detector. It therefore
+evaluates trajectory reconstruction separately from detector reliability.
+
+For a repeatable annotated benchmark:
+
+```bash
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs
+```
+
+Development run (140 manually annotated calls, four WAVs, 384 kHz),
+computed on the prototype prior to GitHub integration:
+
+| WAV | annotated | trajectories returned | median absolute frequency error |
+|---|---:|---:|---:|
+| 20261005_191936.wav | 61 | 57 | 0.92 kHz |
+| 20261005_191947.wav | 38 | 26 | 1.47 kHz |
+| 20261005_192441.wav | 27 | 24 | 1.05 kHz |
+| 20261005_192501.wav | 14 | 14 | 0.80 kHz |
+
+Errors measured only over extracted points inside the annotated temporal
+bounds against PCHIP annotations (linear interpolation for two-point labels).
+The failures are disproportionately short/high-frequency harmonic traces.
+These results are not a benchmark of autonomous seed placement, nor a
+side-by-side comparison against the legacy tracker.
