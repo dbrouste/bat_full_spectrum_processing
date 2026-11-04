@@ -173,7 +173,7 @@ def process_full_spectrum(
     diagnostics: dict | None = None,
     tracking_method: str = "legacy",
     reassignment_n_fft: int = 512,
-    reassignment_hop: int = 48,
+    reassignment_hop: int = 24,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
