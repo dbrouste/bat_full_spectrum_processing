@@ -34,7 +34,9 @@ def track_reassigned_ridge(
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
     subbin_refine=True, anchor_time_radius_ms=0.5,
-    anchor_freq_radius_khz=12.0, time_bounds_s=None, diagnostics=None,
+    anchor_freq_radius_khz=12.0, time_bounds_s=None,
+    cross_seed_velocity_penalty=0.6, cross_seed_position_penalty=0.01,
+    prior_horizon_ms=0.55, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -51,6 +53,9 @@ def track_reassigned_ridge(
         raise ValueError("max_step_hz must be positive")
     if anchor_time_radius_ms <= 0 or anchor_freq_radius_khz <= 0:
         raise ValueError("anchor radii must be positive")
+    if (cross_seed_velocity_penalty < 0 or cross_seed_position_penalty < 0
+            or prior_horizon_ms < 0):
+        raise ValueError("cross-seed penalties and horizon must be nonnegative")
     y = np.asarray(y, dtype=float)
     if y.ndim != 1 or not np.isfinite(y).all():
         raise ValueError("expected finite mono audio")
@@ -130,9 +135,16 @@ def track_reassigned_ridge(
     velocities = np.arange(max_velocity + 1)
     rows, columns = evidence.shape
 
-    def follow(direction):
+    def follow(direction, prior_velocity=None):
         score = np.full((rows, len(velocities)), -1e9)
-        score[anchor_row, :] = 0.0
+        if prior_velocity is None:
+            score[anchor_row, :] = 0.0
+        else:
+            # Pass the left-side approach velocity to the right-side DP
+            # without making it a hard constraint.
+            score[anchor_row, :] = (
+                -cross_seed_velocity_penalty * (velocities - prior_velocity) ** 2
+            )
         backtrace = []
         best_score = -1e9
         best_depth = 0
@@ -160,6 +172,16 @@ def track_reassigned_ridge(
                     transition[np.arange(len(rr)), choices]
                     + 2.5 * evidence[rr, col] - gap_penalty
                 )
+                if (prior_velocity is not None
+                        and depth * dt < prior_horizon_ms / 1000.0):
+                    # Keep the initial right-side trajectory near the
+                    # continuation of the slope measured on the left.
+                    # The prior vanishes after a short transition horizon.
+                    predicted_row = anchor_row - prior_velocity * depth
+                    new[rr, v] -= (
+                        cross_seed_position_penalty *
+                        (rr - predicted_row) ** 2
+                    )
                 prev_rows[rr, v] = previous[valid]
                 prev_vel[rr, v] = choices
             backtrace.append((prev_rows, prev_vel))
@@ -182,7 +204,16 @@ def track_reassigned_ridge(
                 break
         return path
 
-    path = sorted(set(follow(-1) + [(anchor_col, anchor_row)] + follow(1)))
+    left = follow(-1)
+    prior_velocity = None
+    if len(left) >= 3:
+        ordered = sorted(left + [(anchor_col, anchor_row)])
+        last_rows = np.asarray([row for _, row in ordered[-8:]])
+        prior_velocity = float(np.clip(
+            np.median(-np.diff(last_rows)), 0, max_velocity
+        ))
+    path = sorted(set(left + [(anchor_col, anchor_row)]
+                      + follow(1, prior_velocity)))
     if len(path) < (3 if duration < 0.0012 else 4):
         if diagnostics is not None:
             diagnostics.update({"model_success": False, "stop_reason": "too_few_points"})
@@ -215,6 +246,8 @@ def track_reassigned_ridge(
         diagnostics.update({
             "tracking_method": "reassignment_flattop",
             "tracking_algorithm": "second_order_global_dp",
+            "cross_seed_velocity_bins_per_frame": prior_velocity,
+            "cross_seed_position_penalty": float(cross_seed_position_penalty),
             "subbin_refine": bool(subbin_refine),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
