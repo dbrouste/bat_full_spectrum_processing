@@ -79,3 +79,56 @@ def test_short_harmonic_sweep_can_be_tracked():
     assert result is not None
     assert len(result) >= 3
     assert np.all(np.diff(result[:, 0]) > 0)
+
+
+def test_resolution_auto_and_explicit_override():
+    from bat_analysis.reassignment_tracking import choose_reassignment_resolution
+    assert choose_reassignment_resolution(0.00055) == (192, 16)
+    assert choose_reassignment_resolution(0.003) == (512, 24)
+    assert choose_reassignment_resolution(0.00055, n_fft=512, hop=24) == (512, 24)
+    assert choose_reassignment_resolution(0.00055, n_fft=256) == (256, 16)
+    with pytest.raises(ValueError, match="positive"):
+        choose_reassignment_resolution(0.0)
+
+
+def test_detector_candidate_pairs_time_frequency_and_bbox(monkeypatch):
+    from bat_analysis import reassignment_tracking as tracking
+    captured = {}
+    def fake_track(y, sr, **kwargs):
+        captured.update(kwargs)
+        return np.ones((4, 3))
+    monkeypatch.setattr(tracking, "track_reassigned_ridge", fake_track)
+    signal = np.zeros(1024)
+    candidate = dict(time_mid=0.011, duration=0.003,
+                     peak_freq_hz=90000., t_start=0.010, t_end=0.013,
+                     broad_fm_seed_freq_hz=108000.,
+                     coarse_seed_time_s=0.0104)
+    tracking.track_reassigned_candidate(signal, 384000, candidate)
+    assert captured["time_bounds_s"] == (0.010, 0.013)
+    assert captured["time_mid"] == 0.0104
+    assert captured["seed_freq_hz"] == 108000.
+    candidate["broad_fm_seed_freq_hz"] = float("nan")
+    tracking.track_reassigned_candidate(signal, 384000, candidate)
+    assert captured["time_mid"] == 0.011
+    assert captured["seed_freq_hz"] == 90000.
+    assert captured["duration"] == 0.003
+
+
+def test_seed_radius_and_bounds_in_diagnostics():
+    sr = 384000
+    t = np.arange(int(0.020 * sr)) / sr
+    y = np.zeros_like(t)
+    on = (t >= 0.008) & (t <= 0.011)
+    tau = t[on] - 0.008
+    y[on] = np.sin(2 * np.pi * (110000 * tau -
+                                0.5 * (45000 / .003) * tau**2))
+    diag = {}
+    curve = track_reassigned_ridge(
+        y, sr, time_mid=0.0095, duration=0.003,
+        seed_freq_hz=85000., time_bounds_s=(.008, .011),
+        diagnostics=diag,
+    )
+    assert curve is not None
+    assert abs(diag["anchor_time_offset_ms"]) <= 0.5 + 1e-6
+    assert diag["reassignment_n_fft"] == 512
+    assert diag["reassignment_hop"] == 24
