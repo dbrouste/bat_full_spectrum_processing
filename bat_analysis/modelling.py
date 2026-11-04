@@ -175,6 +175,8 @@ def process_full_spectrum(
     reassignment_n_fft: int | None = None,
     reassignment_hop: int | None = None,
     reassignment_subbin_refine: bool = True,
+    reassignment_cross_seed_velocity_penalty: float = 0.6,
+    reassignment_cross_seed_position_penalty: float = 0.01,
     chirp_start_s: float | None = None,
     chirp_end_s: float | None = None,
     broad_fm_seed_time_s: float | None = None,
@@ -216,7 +218,10 @@ def process_full_spectrum(
             y_use, sr, time_mid=chosen_seed_time, duration=duration,
             seed_freq_hz=chosen_seed_freq, time_bounds_s=bounds,
             n_fft=reassignment_n_fft, hop=reassignment_hop,
-            subbin_refine=reassignment_subbin_refine, diagnostics=diagnostics,
+            subbin_refine=reassignment_subbin_refine,
+            cross_seed_velocity_penalty=reassignment_cross_seed_velocity_penalty,
+            cross_seed_position_penalty=reassignment_cross_seed_position_penalty,
+            diagnostics=diagnostics,
         )
         if curve is not None:
             curve[:, 0] -= chunk_start
