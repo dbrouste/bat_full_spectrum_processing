@@ -19,6 +19,7 @@ from scipy.optimize import linear_sum_assignment
 
 from bat_analysis.detection import detect_candidates_snr_blobs
 from bat_analysis.reassignment_tracking import track_reassigned_candidate
+from bat_analysis.harmonics import detect_harmonic_segments
 
 
 def _manual_annotations(record):
@@ -71,7 +72,7 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
 
 
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
-             max_per_file=None, use_broad_seed=True):
+             max_per_file=None, use_broad_seed=True, evaluate_harmonics=False):
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
     per_file = []
     details = []
@@ -131,6 +132,18 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                             points=int(len(curve)))
                 errors.append(item["mean_full_interval_error_khz"])
                 covers.append(float(coverage))
+                if evaluate_harmonics:
+                    harmonic_segments = detect_harmonic_segments(
+                        y, int(sr), curve, parent_id=candidate_index)
+                    item['harmonic_segments'] = [
+                        {'harmonic_order': h.harmonic_order,
+                         'parent_id': h.parent_id,
+                         't_start_ms': h.t_start_s * 1000,
+                         't_end_ms': h.t_end_s * 1000,
+                         'mean_snr_db': h.mean_snr_db,
+                         'median_frequency_ratio': h.median_frequency_ratio}
+                        for h in harmonic_segments
+                    ]
             item["diagnostics"] = diag
             details.append(item)
         summary.update(
@@ -165,12 +178,15 @@ def main():
     parser.add_argument("--n-fft", type=int, default=None)
     parser.add_argument("--hop", type=int, default=None)
     parser.add_argument("--no-broad-seed", action="store_true")
+    parser.add_argument("--harmonics", action="store_true",
+                        help="Report secondary harmonic segments linked to V4 candidates")
     parser.add_argument("--output", default=None,
                         help="Optional output JSON report")
     args = parser.parse_args()
     result = evaluate(
         args.annotations, args.wav_dir, n_fft=args.n_fft, hop=args.hop,
-        max_per_file=args.max_per_file, use_broad_seed=not args.no_broad_seed
+        max_per_file=args.max_per_file, use_broad_seed=not args.no_broad_seed,
+        evaluate_harmonics=args.harmonics
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:
