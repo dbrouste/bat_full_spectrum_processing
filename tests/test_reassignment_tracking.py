@@ -158,3 +158,26 @@ def test_modelling_uses_coarse_time_only_with_its_frequency(monkeypatch):
     process_full_spectrum(signal, 384000, **common)
     assert seen[-1]["time_mid"] == .011
     assert seen[-1]["seed_freq_hz"] == 92000.
+
+
+def test_cross_seed_penalty_validation_and_diagnostics():
+    sr = 384000
+    t = np.arange(int(0.020 * sr)) / sr
+    y = np.zeros_like(t)
+    active = (t >= .007) & (t <= .011)
+    tau = t[active] - .007
+    y[active] = np.sin(2 * np.pi * (120000 * tau -
+                                    .5 * (70000 / .004) * tau**2))
+    kwargs = dict(time_mid=.009, duration=.004,
+                  seed_freq_hz=85000)
+    with pytest.raises(ValueError, match="cross-seed"):
+        track_reassigned_ridge(y, sr, cross_seed_position_penalty=-1, **kwargs)
+    diag = {}
+    curve = track_reassigned_ridge(y, sr, diagnostics=diag, **kwargs)
+    assert curve is not None
+    assert diag["cross_seed_position_penalty"] == 0.01
+    assert "cross_seed_velocity_bins_per_frame" in diag
+    legacy_slope = track_reassigned_ridge(
+        y, sr, cross_seed_velocity_penalty=0.0,
+        cross_seed_position_penalty=0.0, **kwargs)
+    assert legacy_slope is not None
