@@ -41,3 +41,41 @@ def test_unknown_tracking_method_rejected():
         process_full_spectrum(np.zeros(1024), 384000,
                               time_mid=.001, duration=.001,
                               tracking_method="unknown")
+
+
+def test_subbin_refinement_keeps_path_but_refines_frequency():
+    sr = 384000
+    tt = np.arange(int(0.015 * sr)) / sr
+    x = np.zeros_like(tt)
+    on = (tt >= .005) & (tt <= .008)
+    tau = tt[on] - .005
+    x[on] = (np.sin(2 * np.pi * (110000 * tau
+                                - .5 * (50000 / .003) * tau ** 2))
+             * np.sin(np.pi * tau / .003) ** 2)
+    args = dict(time_mid=.0065, duration=.003, seed_freq_hz=85000,
+                n_fft=512, hop=24)
+    raw = track_reassigned_ridge(x, sr, subbin_refine=False, **args)
+    precise = track_reassigned_ridge(x, sr, subbin_refine=True, **args)
+    assert raw is not None and precise is not None
+    np.testing.assert_allclose(raw[:, 0], precise[:, 0])
+    np.testing.assert_allclose(raw[:, 2], precise[:, 2])
+    assert np.isfinite(precise).all()
+    assert np.max(np.abs(raw[:, 1] - precise[:, 1])) <= 3 * sr / 512 + 1e-9
+
+
+def test_short_harmonic_sweep_can_be_tracked():
+    sr = 384000
+    tt = np.arange(int(.015 * sr)) / sr
+    x = np.zeros_like(tt)
+    on = (tt >= .006) & (tt < .00655)
+    tau = tt[on] - .006
+    freq0, delta = 137000, 30000
+    x[on] = np.sin(2 * np.pi * (freq0 * tau
+                                  - .5 * (delta / .00055) * tau ** 2))
+    result = track_reassigned_ridge(
+        x, sr, time_mid=.006275, duration=.00055, seed_freq_hz=122000,
+        n_fft=192, hop=16,
+    )
+    assert result is not None
+    assert len(result) >= 3
+    assert np.all(np.diff(result[:, 0]) > 0)
