@@ -126,3 +126,76 @@ bounds against PCHIP annotations (linear interpolation for two-point labels).
 The failures are disproportionately short/high-frequency harmonic traces.
 These results are not a benchmark of autonomous seed placement, nor a
 side-by-side comparison against the legacy tracker.
+
+## November 2026 — trajectory optimization cycles
+
+The earlier *greedy* and first global-tracker results above are historical
+baselines. The current experimental branch uses the following defaults:
+
+- Flattop FFT 512, **hop 24** (62.5 µs at Fs=384 kHz).
+- Global frequency/velocity dynamic program with **jump_penalty=0.11**
+  and **gap_penalty=0.65**, compared with 0.035 and 1.15 previously.
+- For chirps shorter than 1.2 ms: shorter required trajectory and a
+  larger permitted frequency rate (up to 110 kHz/ms).
+- **Sub-bin frequency refinement** from a reassigned-power centroid within
+  three bins of the selected path; can be disabled using
+  `reassignment_subbin_refine=False` in `process_full_spectrum`
+  or `subbin_refine=False` in `track_reassigned_ridge`.
+
+Example:
+
+```python
+curve = process_full_spectrum(
+    y, sr, time_mid=candidate["time_mid"], duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    tracking_method="reassignment_flattop",
+    reassignment_n_fft=512,
+    reassignment_hop=24,
+    reassignment_subbin_refine=True,
+)
+```
+
+The short-harmonic profile may be evaluated explicitly with
+`reassignment_n_fft=192, reassignment_hop=16`. This setting is **not** the
+default, since the four-file validation set contains no annotated calls
+shorter than 1 ms.
+
+### Local prototype measurements
+
+The optimization was evaluated against 140 validated manual chirps in four
+recordings; 99 annotations in `191936/191947` were used for development
+and 41 in `192441/192501` were held aside for validation. These are
+correlated recordings, not a separate field-site or species cohort.
+
+| Metric (oracle-seeded) | Prior global tracker | Tuned global tracker | Tuned + sub-bin |
+|---|---:|---:|---:|
+| Track returned (140 labels) | 121 | 140 | 140 |
+| Mean full-interval error, development (kHz) | not measured in same protocol | 1.72 | 1.56 |
+| Mean full-interval error, validation (kHz) | not measured in same protocol | 1.35 | 1.13 |
+| Mean temporal coverage, validation | not measured in same protocol | 95.8% | 95.8% |
+
+For the intermediate 512/24 prototype with previous penalties, the
+validation mean error was 2.75 kHz with 81% temporal coverage. This is the
+direct comparator for the tuned configuration in the same evaluation.
+
+**Limitations:** Seeds are generated from the manual annotations, so these
+figures do not establish autonomous detection recall or robustness to an
+incorrect detector candidate. Deterministic seed-jitter stress tests with
+up to +/-0.5 ms time, +/-10 kHz frequency and +/-30% duration were run,
+but they do not replace end-to-end detector testing. In 100 negative
+windows far from annotated calls, the provisional track rate was 1/100
+before penalty tuning and 3/100 after. A proposed track does not by itself
+imply that a bat chirp was present.
+
+To reproduce the documented protocol with local WAVs and annotations:
+
+```bash
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs \
+  --jitter-time-ms 0.5 --jitter-freq-khz 10 \
+  --jitter-duration-fraction 0.3
+```
+
+The GitHub integration and the local prototype have the same algorithmic
+parameters, but the complete GitHub test suite has **not yet been verified**
+in this work session.
