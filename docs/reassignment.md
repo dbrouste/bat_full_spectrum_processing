@@ -199,3 +199,80 @@ python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs \
 The GitHub integration and the local prototype have the same algorithmic
 parameters, but the complete GitHub test suite has **not yet been verified**
 in this work session.
+
+## Detector-seeded tracking and short-harmonic study
+
+Following the oracle-seeded benchmark, we evaluated the upstream
+`adaptive_v4` logic on four labelled WAVs using a local faithful
+reimplementation of its Hann-SNR/blob candidate calculations. This
+proxy experiment must be rerun with the upstream library using
+`benchmark.reassignment_detector_seeds` before claiming a final detector
+recall figure.
+
+There are 140 validated manual trajectories in the four files.
+The local detector proxy yielded 90 candidates, of which 83 could be
+matched one-to-one to annotated trajectories using peak-time and
+peak-frequency constraints. **Unmatched candidates are not automatically
+false positives:** missing annotations or harmonics may explain some.
+
+### Anchoring close to the detector peak
+
+The older tracker searched for the strongest seed within **+/-1.5 ms**,
+which could be a different nearby call or harmonic. It now searches
+within **+/-0.5 ms** by default (at least half a frame hop) and keeps
+the corresponding frequency near the detector's peak (+/-12 kHz).
+
+In the 83 matched candidate examples, the full-interval mean
+frequency error improved from **1.29 kHz to 1.15 kHz**, while matched
+paths exceeding 5 kHz mean error decreased from **2 to 0**.
+With random seed perturbations of +/-0.3 ms, +/-3 kHz and
++/-20% duration, error improved from 1.34 to 1.19 kHz (166 trials).
+With larger perturbations (+/-0.75 ms, +/-10 kHz, +/-30% duration),
+the benefit was less pronounced; seed placement is still a key limitation.
+
+The wrapper `track_reassigned_candidate(y, sr, candidate)` accepts
+the full detector candidate and uses its *actual bbox start/end* for
+analysis rather than assuming the peak is the chirp midpoint. If
+`broad_fm_seed_freq_hz` is available, its paired
+`coarse_seed_time_s` is required before using it. The alternative
+`process_full_spectrum(..., tracking_method="reassignment_flattop")`
+accepts `chirp_start_s`, `chirp_end_s` and
+`broad_fm_seed_time_s` as optional keyword arguments.
+
+### Automatic frequency/time resolution
+
+A separate oracle-seeded evaluation of **21 annotations under 1.2 ms**
+(including harmonics) compared various FFT sizes on the same WAVs:
+
+| Flattop | Mean full-interval error (kHz) | Tracked |
+|---|---:|---:|
+| FFT 512 / hop 24 | 2.48 | 21/21 |
+| FFT 256 / hop 16 | 1.74 | 21/21 |
+| **FFT 192 / hop 16** | **1.38** | **21/21** |
+
+The experimental default now chooses **192/16** below 1.2 ms,
+otherwise **512/24**. Explicit `reassignment_n_fft=512` and
+`reassignment_hop=24` override this selection. This is a
+time-frequency trade-off; a short window broadens the frequency
+main lobe and should not be assumed optimal for all species.
+
+### Reproducing the exact pipeline benchmark
+
+```bash
+python -m benchmark.reassignment_detector_seeds \
+  Nycto-Thomas.json /path/to/wavs \
+  --output detector_reassignment_report.json
+
+# Fixed-resolution control:
+python -m benchmark.reassignment_detector_seeds \
+  Nycto-Thomas.json /path/to/wavs --n-fft 512 --hop 24
+```
+
+The output separates annotated chirps, detector candidates, one-to-one
+matches, missed annotations, unmatched candidate counts, completed tracks,
+per-chirp frequency errors, and coverage. Neither manual time nor manual
+frequency is passed to the tracker during this benchmark.
+
+All these changes remain on the `Reassignment` branch. The main branch
+and default legacy tracker are unmodified. GitHub CI execution is still
+pending verification.
