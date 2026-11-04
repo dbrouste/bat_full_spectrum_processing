@@ -11,8 +11,8 @@ from .reassignment import reassigned_spectrogram
 
 def track_reassigned_ridge(
     y, sr, *, time_mid, duration, seed_freq_hz=None,
-    n_fft=512, hop=48, search_margin_ms=1.0,
-    max_step_hz=None, jump_penalty=0.035, gap_penalty=1.15,
+    n_fft=512, hop=24, search_margin_ms=1.0,
+    max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
     diagnostics=None,
 ):
@@ -77,7 +77,9 @@ def track_reassigned_ridge(
     if not len(time_candidates) or not len(freq_candidates):
         return None
     seeds = evidence[np.ix_(freq_candidates, time_candidates)]
-    if seeds.max() < 0.13:
+    if seeds.max() < (0.08 if duration < 0.0012 else 0.13):
+        if diagnostics is not None:
+            diagnostics.update({"model_success": False, "stop_reason": "weak_seed"})
         return None
     a, b = np.unravel_index(np.argmax(seeds), seeds.shape)
     anchor_row = int(freq_candidates[a])
@@ -87,7 +89,7 @@ def track_reassigned_ridge(
     dt = hop / sr
     # Default upper bound 45 kHz/ms; physical steep FM calls otherwise
     # exceed the previous 7.5 kHz/frame cap.
-    upper_step = 45000000 * dt if max_step_hz is None else max_step_hz
+    upper_step = (110000000 if duration < 0.0012 else 45000000) * dt if max_step_hz is None else max_step_hz
     max_velocity = max(2, min(int(round(upper_step / df)), len(freqs) - 1))
     velocities = np.arange(max_velocity + 1)
     rows, columns = evidence.shape
@@ -120,7 +122,7 @@ def track_reassigned_ridge(
                 rr = row_indices[valid]
                 new[rr, v] = (
                     transition[np.arange(len(rr)), choices]
-                    + 2.5 * evidence[rr, col] - gap_penalty - 0.005 * v
+                    + 2.5 * evidence[rr, col] - gap_penalty
                 )
                 prev_rows[rr, v] = previous[valid]
                 prev_vel[rr, v] = choices
@@ -145,11 +147,16 @@ def track_reassigned_ridge(
         return path
 
     path = sorted(set(follow(-1) + [(anchor_col, anchor_row)] + follow(1)))
-    if len(path) < 4:
+    if len(path) < (3 if duration < 0.0012 else 4):
+        if diagnostics is not None:
+            diagnostics.update({"model_success": False, "stop_reason": "too_few_points"})
         return None
     col_idx = np.asarray([p[0] for p in path], dtype=int)
     row_idx = np.asarray([p[1] for p in path], dtype=int)
-    if t[col_idx[-1]] - t[col_idx[0]] < 0.0005:
+    minimum_duration = (min(0.00025, 0.3 * duration) if duration < 0.0012 else 0.0005)
+    if t[col_idx[-1]] - t[col_idx[0]] < minimum_duration:
+        if diagnostics is not None:
+            diagnostics.update({"model_success": False, "stop_reason": "too_short"})
         return None
     amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
     curve = np.column_stack([t[col_idx], freqs[row_idx], amplitude])
