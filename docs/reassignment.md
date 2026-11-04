@@ -430,3 +430,112 @@ The automated detector can still miss fundamentals and the harmonic
 algorithm cannot recover a missing parent call without another seed.
 The exact integrated repository suite and CI checks are pending and
 should be run before replacing production defaults.
+
+## November 5 — missing-ridge-flank recovery
+
+A spectrogram screenshot showed three fitted points close to the trailing
+part of a conspicuous diagonal FM trace, without its earlier section.
+Two independent issues were identified:
+
+1. The detector's \`time_mid\` is its strongest-energy bin, **not** the
+   temporal midpoint of the call. The old centered duration window could
+   omit the left side before tracking had even started.
+2. The global tracker can end a path when local evidence becomes sparse.
+
+### Energy-peak-aligned analysis window
+
+When no detector bbox is supplied, the experimental
+\`process_full_spectrum\` entry point now uses an **asymmetric search window**:
+\`[peak_time - 1.15 * duration, peak_time + 0.85 * duration]\`.
+When the detector provides actual \`t_start\` and \`t_end\`,
+those bounds take precedence. The direct low-level
+\`track_reassigned_ridge\` API retains a centered window unless
+\`peak_anchored_window=True\` is passed.
+
+The location of the strongest Flattop-STFT energy was checked within 131
+manual chirp intervals of at least 0.6 ms on the four uploaded WAVs.
+55/131 had their strongest bin after 65% of the manually annotated call
+duration. The *geometric* coverage of those annotated intervals by a
+duration-width window around that measured peak averaged 81.3%.
+The proposed asymmetric window had 99.96% geometric coverage.
+This is a controlled crop calculation, **not a detector-seeded recall
+or ridge accuracy benchmark**.
+
+### High-confidence predictive completion
+
+\`bat_analysis/ridge_completion.py\` fits an initial local slope at the
+observed ridge's edge and extrapolates the frequency for the next
+STFT frame. It accepts a proposed point only if a Flattop STFT
+within a 10 kHz search band provides sufficiently strong noise-relative
+energy and a plausible frequency direction. The local slope is updated
+gradually; two weak frames may be bridged, but a group shorter than
+five added points is discarded. It never synthesizes points without
+corresponding signal energy or beyond the analysis bounds.
+
+Experimental defaults:
+- SNR threshold: **17 dB** (noise floor: 20th time percentile/bin).
+- FFT/hop follow the ridge-tracker resolution (typically 512/24).
+- Search radius: **10 kHz**, frequency-prior penalty: **0.14**.
+- Maximum extension per side: **5 ms**.
+- Original ridge samples remain exactly unchanged.
+- \`complete_ends=True\` in the experimental tracker and
+  \`reassignment_complete_ends=True\` in its modelling wrapper.
+
+The completion is separate from \`refine_ridge_endpoint\`, the existing
+frequency-only tail plateau correction. It runs **before** that correction.
+
+### Local validation (separate from the end-to-end benchmark)
+
+The prototype was tested on real WAVs using a controlled artificial
+truncation: three points were interpolated from each annotation at
+64%, 75% and 86% of its duration, and the extension searched only
+for energy before those points. This stress test is not automatic
+detection, as the initial points were obtained from annotations.
+
+- 119 long annotated calls (duration >= 1.2 ms) eligible.
+- Extension returned >=1 point for **116/119** calls.
+- Mean recovery of the portion before the first seed: **93.1%**
+  among those 116 calls, median frequency error **1.13 kHz**.
+- With 100 unrelated windows at least 5 ms away from the nearest
+  annotation, the 17 dB gate yielded **1** apparent extension of at
+  least five frames. These are negative **controls**, not proven
+  false positives (unannotated signals may remain).
+- A separate right-flank artificial-truncation experiment returned
+  extension for **114** eligible calls, mean missing-portion recovery
+  **93.7%**, median error **1.36 kHz**.
+
+Short (<1.2 ms), crossing, low-SNR and CF calls still need
+dedicated evaluation. The added STFT has a runtime cost.
+
+### Reproducible A/B
+
+\`\`\`python
+from bat_analysis.modelling import process_full_spectrum
+
+ridge = process_full_spectrum(
+    y, sr, time_mid=candidate["time_mid"],
+    duration=candidate["duration"],
+    seed_freq_hz=candidate["peak_freq_hz"],
+    tracking_method="reassignment_flattop",
+    reassignment_peak_anchored_window=True,
+    reassignment_complete_ends=True,
+)
+\`\`\`
+
+To compare against the old experimental mode, pass
+\`reassignment_complete_ends=False\` and
+\`reassignment_peak_anchored_window=False\`. Prefer providing the
+detector's original \`chirp_start_s\`/\`chirp_end_s\` when known.
+
+\`\`\`bash
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs
+python -m benchmark.reassignment_ridges Nycto-Thomas.json /path/to/wavs --no-completion
+python -m benchmark.reassignment_detector_seeds Nycto-Thomas.json /path/to/wavs
+python -m benchmark.reassignment_detector_seeds Nycto-Thomas.json /path/to/wavs --no-completion
+\`\`\`
+
+The documented evaluations above used an isolated implementation of
+the added completion algorithm with the WAVs. The complete repository
+test suite and the exact V4-to-tracker combination are **not yet
+validated in CI**, and the source screenshot had no displayed time or
+frequency coordinates with which to identify a specific WAV event.
