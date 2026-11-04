@@ -81,7 +81,8 @@ def detect_harmonic_segments(y, sr, fundamental_curve, *, parent_id=None,
         if not 35000 <= expected <= max_frequency:
             continue
         possible = np.flatnonzero(
-            np.abs(freqs - expected) < frequency_tolerance_khz * 1000.)
+            (np.abs(freqs - expected) < frequency_tolerance_khz * 1000.)
+            & (freqs <= max_frequency))
         if not len(possible):
             continue
         scores = (
