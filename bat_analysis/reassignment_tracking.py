@@ -1,128 +1,165 @@
-"""Experimental ridge tracking on a Flattop reassigned spectrogram.
+"""Experimental global ridge tracker combining Flattop STFT and reassignment.
 
-Independent from the Gaussian legacy tracker. The path is extracted with a
-seed-constrained, continuity-penalized tracking rather than independent column maxima.
+The second-order dynamic program retains slope continuity, in contrast to the
+previous greedy maximum follower. Detector seeds remain optional.
 """
 from __future__ import annotations
-
 import numpy as np
+from scipy.ndimage import gaussian_filter
 from .reassignment import reassigned_spectrogram
 
 
-def track_reassigned_ridge(y, sr, *, time_mid, duration,
-                           seed_freq_hz=None, n_fft=512, hop=64,
-                           search_margin_ms=1.5, max_step_hz=7500.0,
-                           jump_penalty=1.5, gap_penalty=2.0,
-                           max_gap_frames=3, snr_min_db=4.0,
-                           snr_full_db=16.0, diagnostics=None):
-    """Extract ridge as N x 3 [relative time (s), frequency (Hz), amplitude].
+def track_reassigned_ridge(
+    y, sr, *, time_mid, duration, seed_freq_hz=None,
+    n_fft=512, hop=48, search_margin_ms=1.0,
+    max_step_hz=None, jump_penalty=0.035, gap_penalty=1.15,
+    max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
+    diagnostics=None,
+):
+    """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
-    time_mid, duration: seconds relative to supplied audio buffer.
-    Returns None when insufficient seeded coherent energy is available.
-    Amplitude is normalized to [0,1], NOT legacy Gaussian amplitude.
+    The optimization uses frequency and velocity as states. The forward-time
+    chirp is non-increasing in frequency. No annotations are used at inference.
+    Input time_mid and duration are in seconds.
     """
-    if duration <= 0 or max_step_hz <= 0 or max_gap_frames < 0:
-        raise ValueError("invalid tracking parameters")
-    y = np.asarray(y)
-    if y.ndim != 1:
-        raise ValueError("expected mono audio")
-    center = float(time_mid)
-    start = max(0.0, center - float(duration)/2 - search_margin_ms/1000)
-    stop = min(len(y)/sr, center + float(duration)/2 + search_margin_ms/1000)
-    # Work on the short excerpt, not the entire recording.
-    first = max(0, int(np.floor(start*sr)) - n_fft)
-    last = min(len(y), int(np.ceil(stop*sr)) + n_fft)
+    if duration <= 0 or sr <= 0 or n_fft < 32 or hop < 1 or hop > n_fft:
+        raise ValueError("invalid sample rate, duration or STFT configuration")
+    if jump_penalty < 0 or gap_penalty < 0:
+        raise ValueError("penalties must be nonnegative")
+    if max_step_hz is not None and max_step_hz <= 0:
+        raise ValueError("max_step_hz must be positive")
+    y = np.asarray(y, dtype=float)
+    if y.ndim != 1 or not np.isfinite(y).all():
+        raise ValueError("expected finite mono audio")
+    start = max(0.0, time_mid - duration / 2 - search_margin_ms / 1000)
+    stop = min(len(y) / sr, time_mid + duration / 2 + search_margin_ms / 1000)
+    first = max(0, int(start * sr) - n_fft)
+    last = min(len(y), int(stop * sr) + n_fft)
     if last - first < n_fft:
         return None
-    clip = y[first:last]
-    fmin = 20000.0
-    fmax = min(150000.0, sr/2)
-    if seed_freq_hz is not None and np.isfinite(seed_freq_hz):
-        # Allow large chirp excursions while excluding distant harmonics.
-        fmin = max(fmin, float(seed_freq_hz) - 50000)
-        fmax = min(fmax, float(seed_freq_hz) + 50000)
-    if fmax <= fmin:
-        return None
-    data = reassigned_spectrogram(
-        clip, sr, n_fft=n_fft, hop=hop, fmin=fmin, fmax=fmax,
-        noise_percentile=20, snr_min_db=snr_min_db, snr_full_db=snr_full_db,
+    # Limit reassignment computation to the local window. Keep the full
+    # 20-150 kHz band so large FM sweeps do not get cut off by a seed.
+    r = reassigned_spectrogram(
+        y[first:last], sr, n_fft=n_fft, hop=hop,
+        fmin=20000, fmax=min(150000, sr / 2),
+        noise_percentile=20, snr_min_db=snr_min_db,
+        snr_full_db=snr_full_db,
     )
-    ts = data["times_s"] + first/sr
-    fs = data["freqs_hz"]
-    power = data["reassigned_power"]
-    keep_t = (ts >= start) & (ts <= stop)
-    if not np.any(keep_t):
-        return None
-    ts = ts[keep_t]
-    power = power[:, keep_t]
-    rows, cols = power.shape
-    if cols < 3 or rows < 2 or not np.any(power > 0):
+    freqs = r["freqs_hz"]
+    times_all = r["times_s"] + first / sr
+    keep = (times_all >= start) & (times_all <= stop)
+    t = times_all[keep]
+    regular = r["stft_power"][:, keep]
+    reassigned = r["reassigned_power"][:, keep]
+    snr = r["snr_db"][:, keep]
+    if len(t) < 4 or len(freqs) < 2 or not reassigned.any():
         return None
 
-    # Keep only bins with real assigned energy; all zero bins are forbidden.
-    peak = float(power.max())
-    weights = np.full(power.shape, -np.inf, dtype=float)
-    active = power > 0
-    weights[active] = np.log1p(power[active] / peak * 100)
-    # Seed in a narrow time window; fallback to best available near center.
-    seed_cols = np.where(np.abs(ts - center) <= max(2*hop/sr, 0.001))[0]
-    if seed_cols.size == 0:
-        seed_cols = np.array([int(np.argmin(np.abs(ts-center)))])
+    # A smooth STFT contribution bridges sparse reassigned pixels. Both
+    # components use a frequency-wise noise floor to suppress fixed tones.
+    focused = gaussian_filter(reassigned, (1.2, 0.7), mode="constant")
+    broad = gaussian_filter(regular, (1.0, 0.5), mode="constant")
+    focused_db = 10 * np.log10(np.maximum(focused, 1e-30))
+    broad_db = 10 * np.log10(np.maximum(broad, 1e-30))
+    floor = np.percentile(broad_db, 20, axis=1)
+    evidence = np.clip(
+        0.65 * np.maximum(0, focused_db - floor[:, None] - 2)
+        + 0.35 * np.maximum(0, broad_db - floor[:, None] - 3),
+        0, 32,
+    ) / 32
+    evidence[snr < 2] *= 0.3
+
+    time_candidates = np.flatnonzero(abs(t - time_mid) <= 0.0015)
     if seed_freq_hz is not None and np.isfinite(seed_freq_hz):
-        seed_rows = np.where(np.abs(fs - seed_freq_hz) <= 12000)[0]
+        freq_candidates = np.flatnonzero(abs(freqs - seed_freq_hz) <= 12000)
     else:
-        seed_rows = np.arange(rows)
-    if seed_rows.size == 0:
+        freq_candidates = np.arange(len(freqs))
+    if not len(time_candidates) or not len(freq_candidates):
         return None
-    sub = weights[np.ix_(seed_rows,seed_cols)]
-    if not np.isfinite(sub).any():
+    seeds = evidence[np.ix_(freq_candidates, time_candidates)]
+    if seeds.max() < 0.13:
         return None
-    seed = np.unravel_index(np.argmax(sub), sub.shape)
-    anchor_r, anchor_c = int(seed_rows[seed[0]]), int(seed_cols[seed[1]])
+    a, b = np.unravel_index(np.argmax(seeds), seeds.shape)
+    anchor_row = int(freq_candidates[a])
+    anchor_col = int(time_candidates[b])
 
-    step_bins = max(1, int(np.ceil(max_step_hz / (sr/n_fft))))
-    # Greedy continuity-penalized tracking in both directions. Bridges up to max_gap_frames
-    # missing columns; no unrelated components can start new paths.
-    points = [(anchor_c, anchor_r)]
-    for direction in (-1, 1):
-        current_c, current_r = anchor_c, anchor_r
-        gap = 0
-        history = []
-        while 0 <= current_c + direction < cols:
-            target_c = current_c + direction
-            candidate = np.arange(max(0,current_r-step_bins),
-                                  min(rows,current_r+step_bins+1))
-            valid = candidate[np.isfinite(weights[candidate,target_c])]
-            if valid.size:
-                # Small penalty for large frequency jumps.
-                scores = weights[valid,target_c] - jump_penalty * (
-                    np.abs(valid-current_r)/max(step_bins,1))**2 - gap_penalty*gap
-                nr = int(valid[int(np.argmax(scores))])
-                history.append((target_c,nr))
-                current_r = nr
-                gap = 0
-            else:
-                gap += 1
-                if gap > max_gap_frames:
-                    break
-            current_c = target_c
-        points.extend(history)
-    points = sorted(set(points))
-    if len(points) < 3:
+    df = sr / n_fft
+    dt = hop / sr
+    # Default upper bound 45 kHz/ms; physical steep FM calls otherwise
+    # exceed the previous 7.5 kHz/frame cap.
+    upper_step = 45000000 * dt if max_step_hz is None else max_step_hz
+    max_velocity = max(2, min(int(round(upper_step / df)), len(freqs) - 1))
+    velocities = np.arange(max_velocity + 1)
+    rows, columns = evidence.shape
+
+    def follow(direction):
+        score = np.full((rows, len(velocities)), -1e9)
+        score[anchor_row, :] = 0.0
+        backtrace = []
+        best_score = -1e9
+        best_depth = 0
+        best_row = anchor_row
+        best_velocity = 0
+        row_indices = np.arange(rows)
+        for depth in range(1, columns):
+            col = anchor_col + direction * depth
+            if col < 0 or col >= columns:
+                break
+            new = np.full_like(score, -1e9)
+            prev_rows = np.full(score.shape, -1, dtype=np.int32)
+            prev_vel = np.full(score.shape, -1, dtype=np.int16)
+            for v in velocities:
+                # Frequency declines as time increases, in both directions.
+                previous = row_indices + direction * v
+                valid = (previous >= 0) & (previous < rows)
+                if not valid.any():
+                    continue
+                delta_v = velocities - v
+                transition = score[previous[valid], :] - jump_penalty * delta_v[None, :] ** 2
+                choices = np.argmax(transition, axis=1)
+                rr = row_indices[valid]
+                new[rr, v] = (
+                    transition[np.arange(len(rr)), choices]
+                    + 2.5 * evidence[rr, col] - gap_penalty - 0.005 * v
+                )
+                prev_rows[rr, v] = previous[valid]
+                prev_vel[rr, v] = choices
+            backtrace.append((prev_rows, prev_vel))
+            score = new
+            row, vel = np.unravel_index(np.argmax(score), score.shape)
+            if score[row, vel] > best_score:
+                best_score = float(score[row, vel])
+                best_depth = depth
+                best_row = int(row)
+                best_velocity = int(vel)
+        if best_depth == 0:
+            return []
+        row, vel = best_row, best_velocity
+        path = []
+        for depth in range(best_depth, 0, -1):
+            path.append((anchor_col + direction * depth, row))
+            previous_rows, previous_vel = backtrace[depth - 1]
+            row, vel = int(previous_rows[row, vel]), int(previous_vel[row, vel])
+            if row < 0:
+                break
+        return path
+
+    path = sorted(set(follow(-1) + [(anchor_col, anchor_row)] + follow(1)))
+    if len(path) < 4:
         return None
-    col_idx = np.asarray([p[0] for p in points],dtype=int)
-    row_idx = np.asarray([p[1] for p in points],dtype=int)
-    tt = ts[col_idx]
-    ff = fs[row_idx]
-    amp = np.sqrt(power[row_idx,col_idx]/peak)
-    curve = np.column_stack([tt,ff,amp])
+    col_idx = np.asarray([p[0] for p in path], dtype=int)
+    row_idx = np.asarray([p[1] for p in path], dtype=int)
+    if t[col_idx[-1]] - t[col_idx[0]] < 0.0005:
+        return None
+    amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
+    curve = np.column_stack([t[col_idx], freqs[row_idx], amplitude])
     if diagnostics is not None:
         diagnostics.update({
             "tracking_method": "reassignment_flattop",
+            "tracking_algorithm": "second_order_global_dp",
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
-            "reassignment_points": int(len(curve)),
-            "reassignment_valid_fraction": data["valid_fraction"],
+            "reassignment_valid_fraction": r["valid_fraction"],
             "model_success": True,
             "final_points": int(len(curve)),
         })
