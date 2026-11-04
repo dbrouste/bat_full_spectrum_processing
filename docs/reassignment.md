@@ -49,8 +49,8 @@ integrating reassigned blobs into candidate generation.
 ## Experimental trajectory reconstruction
 
 `process_full_spectrum` now accepts `tracking_method="reassignment_flattop"`.
-The default remains `"legacy"`. The new mode replaces the **trajectory
-tracking stage**, not the SNR blob detector. It follows reassigned Flattop
+On the `Reassignment` branch, the default is now `"reassignment_flattop"`.
+The new mode replaces the **trajectory tracking stage**, not the SNR blob detector. It follows reassigned Flattop
 power in both directions from the supplied seed using a continuity-penalized
 local peak selector with a short gap allowance. It does not yet use the legacy
 Gaussian line-fit iterations, so these two reconstruction methods must be
@@ -273,8 +273,8 @@ matches, missed annotations, unmatched candidate counts, completed tracks,
 per-chirp frequency errors, and coverage. Neither manual time nor manual
 frequency is passed to the tracker during this benchmark.
 
-All these changes remain on the `Reassignment` branch. The main branch
-and default legacy tracker are unmodified. GitHub CI execution is still
+All these changes remain on the `Reassignment` branch. The `main` branch retains the legacy default; only `Reassignment`
+uses the reassigned tracker by default. GitHub CI execution is still
 pending verification.
 
 ## Cross-seed slope continuity
@@ -327,8 +327,9 @@ recordings before it can replace the baseline in `main`.
 
 ## Experimental second-harmonic recovery and observed-tail correction
 
-**Opt-in to experimental ridge tracking**, `tracking_method="reassignment_flattop"`.
-The main branch and the default legacy tracker are unchanged.
+**Reassignment tracking is now the default on this branch.**
+To use the historical mode, pass `tracking_method="legacy"` explicitly.
+The `main` branch is unchanged.
 
 ### Fundamental tracking and tail correction
 
