@@ -796,3 +796,36 @@ deterministic ridge reconstruction.
 full-WAV before/after timing and annotation-quality comparison of the
 complete pipeline remain to be verified; no overall speedup figure
 is claimed yet.
+
+## Lightweight Reassignment-v2 entrypoint for the desktop CPU workers
+
+`bat_analysis.fast_modelling.process_reassigned_fast` is equivalent to
+`bat_analysis.modelling.process_full_spectrum(...,
+tracking_method="reassignment_flattop")` for Reassignment-v2 default
+parameters. It preserves the original 15-ms chunk-relative time convention,
+modelled ridge coordinates, detector bbox, and seed handling.
+
+Unlike `modelling.py`, importing the fast module does not import
+`librosa` or the legacy Gaussian tracking code. This is particularly
+important for multiprocessing on Windows, where every spawned Python
+interpreter must import its modelling function separately.
+
+The desktop application `Bat-Acoustic-Analyser/Reassignment-v2`
+detects `fast_modelling.py` in the selected local checkout and
+uses it automatically; the public modelling function remains unchanged
+for backwards compatibility. Tests in `tests/test_fast_modelling.py`
+compare the lightweight wrapper's parameters, outputs and diagnostics
+against the full public entrypoint.
+
+The ridge tracker also supplies optional
+`diagnostics["timings_ms"]` when passed a diagnostics dictionary.
+The breakdown includes `reassignment_fft`, `evidence_and_setup`,
+`global_dp`, `ridge_sampling`, `completion`,
+`confidence`, and `endpoint`. Disabled by default when no
+diagnostics dictionary is passed.
+
+The desktop worker's new log reports timings for every chirp and a
+summary of the slowest five; the full application benchmark is
+`benchmark_ridge_parallel.py`. Speed figures measured only on
+isolated kernels or manually interpolated trajectories are **not**
+valid substitutes for full-WAV timing in the Windows portable build.
