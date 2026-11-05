@@ -56,3 +56,19 @@ def test_coarse_seed_is_paired_with_time(monkeypatch):
     process_reassigned_fast(x, 384000, **a)
     assert records[-1]["time_mid"] == .010
     assert records[-1]["seed_freq_hz"] == 90000.
+
+
+def test_ms_as_seconds_rejected_before_expensive_stft():
+    from bat_analysis.reassignment_tracking import track_reassigned_ridge
+    samples = np.zeros(3840, dtype=np.float32)
+    with pytest.raises(ValueError, match="milliseconds instead of seconds"):
+        track_reassigned_ridge(
+            samples, 384000,
+            time_mid=.005, duration=2.0, seed_freq_hz=80000,
+        )
+    with pytest.raises(ValueError, match="milliseconds instead of seconds"):
+        track_reassigned_ridge(
+            samples, 384000,
+            time_mid=.005, duration=2.0, seed_freq_hz=80000,
+            time_bounds_s=(.004, .006),
+        )
