@@ -51,7 +51,19 @@ benchmark/
 
 notebooks/
     annotation.ipynb
+    Comparaison_main_Reassignment_Colab.ipynb  # Colab: Reassignment vs Reassignment-v2
 ```
+
+### Comparer les branches Reassignment dans Colab
+
+Le notebook [Comparaison_main_Reassignment_Colab.ipynb](notebooks/Comparaison_main_Reassignment_Colab.ipynb)
+clone séparément les branches `Reassignment` et `Reassignment-v2`, affiche leurs
+trajectoires en vert et bleu sur un spectrogramme Plotly (palette Magma), et
+permet d'inspecter un chirp avec les vues de suivi et d'évidence.
+
+Ouvrir le notebook dans Google Colab, exécuter les cellules dans l'ordre, puis
+sélectionner le WAV à analyser. Le notebook actualise les deux branches lors
+de chaque nouvelle session, et affiche les identifiants des commits utilisés.
 
 ## Installation
 
