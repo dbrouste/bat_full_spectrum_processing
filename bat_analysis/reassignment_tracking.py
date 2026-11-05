@@ -65,7 +65,7 @@ def track_reassigned_ridge(
             or prior_horizon_ms < 0):
         raise ValueError("cross-seed penalties and horizon must be nonnegative")
     y = np.asarray(y)
-    if y.ndim != 1 or not np.isfinite(y).all():
+    if y.ndim != 1:
         raise ValueError("expected finite mono audio")
     if time_bounds_s is None:
         if peak_anchored_window:
@@ -90,8 +90,13 @@ def track_reassigned_ridge(
         return None
     # Limit reassignment computation to the local window. Keep the full
     # 20-150 kHz band so large FM sweeps do not get cut off by a seed.
+    # Only this local window is used; avoid scanning the entire recording
+    # for NaN/Inf values on every chirp in a multi-second WAV.
+    segment = np.asarray(y[first:last], dtype=np.float64)
+    if not np.isfinite(segment).all():
+        raise ValueError("expected finite mono audio")
     r = reassigned_spectrogram(
-        np.asarray(y[first:last], dtype=np.float64), sr, n_fft=n_fft, hop=hop,
+        segment, sr, n_fft=n_fft, hop=hop,
         fmin=20000, fmax=min(150000, sr / 2),
         noise_percentile=20, snr_min_db=snr_min_db,
         snr_full_db=snr_full_db,
