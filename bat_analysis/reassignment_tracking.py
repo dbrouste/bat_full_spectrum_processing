@@ -50,6 +50,22 @@ def track_reassigned_ridge(
     Input time_mid and duration are in seconds.
     """
     _profile_start = time.perf_counter() if diagnostics is not None else None
+    # Prevent the historically observed ms-vs-s mistake from expanding
+    # a 2 ms chirp into a multi-second FFT/DP search (thousands of frames).
+    # A long >250 ms event is allowed only if explicit detector bounds match.
+    if duration > 0.25:
+        matching_bounds = (
+            time_bounds_s is not None and len(time_bounds_s) == 2
+            and np.isfinite(time_bounds_s).all()
+            and abs(float(time_bounds_s[1]) - float(time_bounds_s[0])
+                    - float(duration)) < 0.05
+        )
+        if not matching_bounds:
+            raise ValueError(
+                "Implausible chirp duration in seconds. "
+                "Did the application pass milliseconds instead of seconds? "
+                f"duration={duration!r}, bounds={time_bounds_s!r}"
+            )
     n_fft, hop = choose_reassignment_resolution(duration, n_fft, hop)
     if sr <= 0:
         raise ValueError("invalid sample rate")
