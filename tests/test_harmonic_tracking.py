@@ -76,6 +76,44 @@ def test_tail_correction_keeps_time_amplitude_and_input():
     assert diag["max_correction_hz"] <= 16000
 
 
+def test_endpoint_correction_rejects_unsupported_frequency_shift():
+    t = np.linspace(.010, .013, 70)
+    f = 118000 - 22000000 * (t - t[0])
+    f[48:] = f[47]
+    curve = np.column_stack([t, f, np.ones(len(t))])
+    frequency_grid = np.linspace(20000., 150000., 261)
+    power = np.full((len(frequency_grid), len(t)), 1e-9)
+    for j, observed_freq in enumerate(f):
+        ri = int(np.argmin(abs(frequency_grid - observed_freq)))
+        power[ri, j] = 1.0
+
+    ungated = refine_ridge_endpoint(curve)
+    guarded, diag = refine_ridge_endpoint(
+        curve, times_s=t, freqs_hz=frequency_grid,
+        stft_power=power, return_diagnostics=True)
+    assert ungated[-1, 1] < curve[-1, 1]
+    assert guarded[-1, 1] == curve[-1, 1]
+    assert diag["spectral_support_gated"]
+    assert diag["rejected_corrections"] > 0
+
+
+def test_endpoint_correction_accepts_supported_frequency_shift():
+    t = np.linspace(.010, .013, 70)
+    f = 118000 - 22000000 * (t - t[0])
+    f[48:] = f[47]
+    curve = np.column_stack([t, f, np.ones(len(t))])
+    ungated = refine_ridge_endpoint(curve)
+    frequency_grid = np.linspace(20000., 150000., 261)
+    power = np.full((len(frequency_grid), len(t)), 1e-9)
+    for j, (observed, corrected) in enumerate(zip(f, ungated[:, 1])):
+        for freq in (observed, corrected):
+            ri = int(np.argmin(abs(frequency_grid - freq)))
+            power[ri, j] = 1.0
+    guarded = refine_ridge_endpoint(
+        curve, times_s=t, freqs_hz=frequency_grid, stft_power=power)
+    np.testing.assert_allclose(guarded, ungated)
+
+
 def test_cf_trajectory_not_forced_down():
     t = np.linspace(.010, .013, 70)
     curve = np.column_stack([t, np.full_like(t, 80000.),

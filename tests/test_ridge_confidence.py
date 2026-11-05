@@ -24,6 +24,15 @@ def sample_track(weak_tail=0, *, all_strong=False):
     return curve, times, freqs, power, snr
 
 
+def weaken_points(curve, times, freqs, power, snr, start, stop):
+    """Make the selected curve indices unsupported without changing neighbors."""
+    for k in range(start, stop):
+        ci = int(np.argmin(abs(times - curve[k, 0])))
+        ri = int(np.argmin(abs(freqs - curve[k, 1])))
+        power[ri, ci] = 1e-5
+        snr[ri, ci] = 3.0
+
+
 def test_trims_only_sustained_weak_right_suffix():
     curve, t, f, power, snr = sample_track(weak_tail=12)
     unchanged = curve.copy()
@@ -32,6 +41,7 @@ def test_trims_only_sustained_weak_right_suffix():
         stft_power=power, snr_db=snr, return_diagnostics=True)
     assert d["trimmed_right_points"] >= 11
     assert d["trailing_weak_points"] >= 12
+    assert d["trim_reason"] == "weak_right_suffix"
     assert np.array_equal(result, unchanged[:len(result)])
     assert result[-1, 0] < curve[-1, 0]
 
@@ -66,6 +76,40 @@ def test_short_track_and_inner_weak_patch_unchanged():
     )
 
 
+def test_stops_at_late_power_gap_even_if_strong_ridge_resumes():
+    curve, t, f, power, snr = sample_track(all_strong=True)
+    weaken_points(curve, t, f, power, snr, 35, 41)
+    result, d = trim_weak_right_tail(
+        curve, times_s=t, freqs_hz=f,
+        stft_power=power, snr_db=snr, return_diagnostics=True)
+    np.testing.assert_array_equal(result, curve[:35])
+    assert d["trailing_weak_points"] == 0
+    assert d["trimmed_right_points"] == len(curve) - 35
+    assert d["late_gap_start_index"] == 35
+    assert d["late_gap_length"] == 6
+    assert d["trim_reason"] == "late_power_gap"
+
+
+def test_preserves_short_late_gap_with_strong_recovery():
+    curve, t, f, power, snr = sample_track(all_strong=True)
+    weaken_points(curve, t, f, power, snr, 39, 42)  # Fewer than four frames
+    result, d = trim_weak_right_tail(
+        curve, times_s=t, freqs_hz=f,
+        stft_power=power, snr_db=snr, return_diagnostics=True)
+    np.testing.assert_array_equal(result, curve)
+    assert d["trim_reason"] is None
+
+
+def test_preserves_early_internal_power_gap():
+    curve, t, f, power, snr = sample_track(all_strong=True)
+    weaken_points(curve, t, f, power, snr, 17, 23)
+    result, d = trim_weak_right_tail(
+        curve, times_s=t, freqs_hz=f,
+        stft_power=power, snr_db=snr, return_diagnostics=True)
+    np.testing.assert_array_equal(result, curve)
+    assert d["trim_reason"] is None
+
+
 def test_invalid_matrices_and_thresholds():
     curve, t, f, power, snr = sample_track()
     with pytest.raises(ValueError, match="inconsistent shapes"):
@@ -76,3 +120,7 @@ def test_invalid_matrices_and_thresholds():
         trim_weak_right_tail(
             curve, times_s=t, freqs_hz=f,
             stft_power=power, snr_db=snr, min_snr_db=-1)
+    with pytest.raises(ValueError, match="thresholds"):
+        trim_weak_right_tail(
+            curve, times_s=t, freqs_hz=f,
+            stft_power=power, snr_db=snr, late_gap_min_fraction=0)

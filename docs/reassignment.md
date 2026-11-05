@@ -641,9 +641,9 @@ returning synthetic values) and only bridges them internally when coherent
 above-threshold energy resumes promptly.
 
 A second conservative guard, `trim_weak_right_tail`, examines the **entire
-tracked ridge** after any completion and before the existing frequency-only
-endpoint correction. It trims a trailing suffix only if both conditions
-fail for at least four consecutive points:
+tracked ridge** after completion and before the endpoint correction. It
+trims a trailing suffix when the following conditions both fail for at least
+four consecutive points:
 
 - Flattop STFT SNR at the ridge frequency: `>= 10 dB`.
 - Power relative to the strongest point **on that same ridge**:
@@ -652,9 +652,21 @@ fail for at least four consecutive points:
 The guard preserves the first eight points and, by default, trims no more
 than 45% of a curve in one operation. It does not alter timestamps or
 frequencies of retained points. Small/short chirps are treated
-conservatively. Diagnostics are reported as
-`diagnostics["tail_confidence"]["trimmed_right_points"]` and
-`diagnostics["ridge_completion"]["weak_skipped_right"]`.
+conservatively. An additional late-gap rule now stops tracking at the
+beginning of a run of at least four consecutive points with power below
+`-22 dB` relative to the trajectory peak, even if stronger energy resumes
+afterwards on a potentially unrelated ridge. It only applies after 60% of
+the observed trajectory, after its power peak, and within the same 45%
+maximum trimming budget; earlier or shorter gaps are preserved.
+
+The final endpoint-frequency refinement is now gated by the actual STFT
+energy: it only moves a point to a lower frequency when the proposed
+location retains at least 50% of the spectral power of the original
+location. The preceding confidence filter does not move retained points.
+Diagnostics include `tail_confidence.trim_reason`,
+`tail_confidence.late_gap_start_index`,
+`tail_confidence.trimmed_right_points` and
+`endpoint_refinement.rejected_corrections`.
 
 ### Experimental parameters
 
@@ -692,6 +704,12 @@ A more distant low-frequency feature can have more SNR again (~11.8 dB
 at 798.00 ms), which explains why a permissive gap mechanism could
 follow it. These numbers come from a local STFT diagnostic on the
 real WAV, not a complete CI-validated tracker benchmark.
+
+On this WAV, the updated tracker keeps 52 successful trajectories among
+54 candidates, identical to the previous version. It shortens three
+late-rejoining paths (#4, #43 and #44). Chirp #4 now ends at 797.582 ms
+instead of 798.332 ms (30 rather than 42 points). The endpoint spectral
+gate also prevents unsupported late downward-frequency corrections.
 
 The filtering adds a safeguard against those mistakes. Its true recall
 effect on faint chirps and its impact on more varied field recordings

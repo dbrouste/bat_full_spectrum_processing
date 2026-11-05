@@ -283,6 +283,7 @@ def track_reassigned_ridge(
         from .endpoint_refinement import refine_ridge_endpoint
         curve, endpoint_diag = refine_ridge_endpoint(
             curve, tail_fraction=endpoint_tail_fraction,
+            times_s=t, freqs_hz=freqs, stft_power=regular,
             return_diagnostics=True,
         )
     if diagnostics is not None:

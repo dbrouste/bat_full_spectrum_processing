@@ -1,8 +1,8 @@
 """Conservative confidence-based stopping for reassigned FM ridge tails.
 
-Trimming only removes observed points at the far right whose STFT evidence
-has collapsed; it never extrapolates, moves frequencies, or changes the
-high-confidence interior of a trajectory.
+Trimming removes unsupported right-hand points, including a late sustained
+power gap followed by a misleading recovery on a different ridge. It never
+extrapolates, moves frequencies, or changes the high-confidence interior.
 """
 from __future__ import annotations
 import numpy as np
@@ -12,15 +12,19 @@ def trim_weak_right_tail(
     curve, *, times_s, freqs_hz, stft_power, snr_db,
     min_snr_db=10.0, min_relative_db=-22.0,
     min_weak_points=4, min_keep_points=8, max_trim_fraction=0.45,
+    late_gap_min_fraction=0.60,
     return_diagnostics=False,
 ):
-    """Remove a sustained low-confidence suffix, preserving real FM endpoints.
+    """Remove a weak suffix or a late power collapse preceding a false rejoin.
 
     A point has sufficient support only if its local STFT SNR exceeds the
     threshold *and* its spectral power is not excessively lower than the
     strongest power seen along this particular trajectory. Using both
     prevents narrow, high-SNR noise islands far after the real chirp from
     being accepted merely because the noise baseline is extremely low.
+    Unlike a suffix-only check, a late run of weak-power frames also stops
+    the curve if it subsequently joins another, seemingly strong ridge.
+    Early gaps and short late gaps remain untouched.
     """
     x = np.asarray(curve, dtype=float)
     t = np.asarray(times_s, dtype=float)
@@ -39,11 +43,15 @@ def trim_weak_right_tail(
         raise ValueError("STFT power and SNR must be finite and valid")
     if (min_snr_db < 0 or min_relative_db >= 0
             or min_weak_points < 1 or min_keep_points < 2
-            or not 0 < max_trim_fraction < 1):
+            or not 0 < max_trim_fraction < 1
+            or not 0 < late_gap_min_fraction < 1):
         raise ValueError("invalid right-tail confidence thresholds")
     diag = {
         "trimmed_right_points": 0,
         "trailing_weak_points": 0,
+        "trim_reason": None,
+        "late_gap_start_index": None,
+        "late_gap_length": 0,
         "min_snr_db": float(min_snr_db),
         "min_relative_db": float(min_relative_db),
     }
@@ -76,13 +84,39 @@ def trim_weak_right_tail(
             break
         weak_suffix += 1
     diag["trailing_weak_points"] = int(weak_suffix)
-    if weak_suffix < min_weak_points:
-        return (x.copy(), diag) if return_diagnostics else x.copy()
-    keep = max(
-        len(x) - weak_suffix,
+    minimum_keep = max(
         min_keep_points,
         int(np.ceil(len(x) * (1.0 - max_trim_fraction))),
     )
+    keep = len(x)
+    if weak_suffix >= min_weak_points:
+        keep = max(len(x) - weak_suffix, minimum_keep)
+        if keep < len(x):
+            diag["trim_reason"] = "weak_right_suffix"
+
+    # An apparently strong terminal ridge can hide a weak gap immediately
+    # before it. The suffix-only rule misses this exact failure mode. Use
+    # power, rather than SNR alone, to avoid cutting genuine calls with a
+    # temporary noise-floor fluctuation. Do not touch early internal gaps.
+    weak_power = relative_db < min_relative_db
+    late_start = max(
+        minimum_keep,
+        int(np.ceil(len(x) * late_gap_min_fraction)),
+        int(np.argmax(local_power)) + 1,
+    )
+    for pos in range(late_start, len(x) - min_weak_points):
+        if (np.all(weak_power[pos:pos + min_weak_points])
+                and np.any(~weak_power[pos + min_weak_points:])):
+            end = pos
+            while end < len(x) and weak_power[end]:
+                end += 1
+            diag["late_gap_start_index"] = int(pos)
+            diag["late_gap_length"] = int(end - pos)
+            if pos < keep:
+                keep = pos
+                diag["trim_reason"] = "late_power_gap"
+            break
+
     diag["trimmed_right_points"] = len(x) - keep
     result = x[:keep].copy()
     return (result, diag) if return_diagnostics else result
