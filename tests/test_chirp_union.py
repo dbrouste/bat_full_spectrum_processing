@@ -124,3 +124,38 @@ def test_candidate_to_group_wrapper_with_diagnostic_failures(monkeypatch):
     assert len(result["groups"]) == 1
     assert result["groups"][0].kind == "stitched"
     assert len(result["tracking_diagnostics"]) == 3
+
+
+def test_near_1038ms_same_call_fragments_join_but_following_call_does_not():
+    """Representative geometry from 20261005_191936: distinct later FM stays separate."""
+    fragment10 = ridge(1037.6, 1040.05, 112, -19)
+    fragment11 = ridge(1038.2, 1040.35, 112 - 19 * .6, -19)
+    following = ridge(1039.90, 1042.4, 108, -19)
+    groups = group_overlapping_chirps(
+        [fragment10, fragment11, following],
+        source_ids=[10, 11, 12],
+        min_overlap_ms=.20,
+        median_freq_tolerance_hz=4000.,
+        p90_freq_tolerance_hz=7000.,
+        slope_tolerance_hz_per_ms=7000.,
+    )
+    tracks = [sources for group in groups for sources in group.stitched_sources]
+    assert (10, 11) in tracks
+    assert (12,) in tracks
+    merged_group = [group for group in groups if 10 in group.source_ids][0]
+    assert len(merged_group.ridges) == 2
+    first = merged_group.ridges[merged_group.stitched_sources.index((10, 11))]
+    assert first[0, 0] == pytest.approx(1.0376)
+    assert first[-1, 0] == pytest.approx(1.04035)
+    assert np.all(np.diff(first[:, 0]) > 0)
+
+
+def test_similar_timing_but_separate_frequency_rejected_at_five_khz_tolerance():
+    """The simplification tolerance is not a license to join distinct calls."""
+    a = ridge(1037.6, 1040.0, 112, -19)
+    b = ridge(1038.7, 1042.3, 105, -19)
+    # Simultaneous frequency difference ~28 kHz.
+    assert not can_stitch_ridges(
+        a, b, median_freq_tolerance_hz=4000.,
+        p90_freq_tolerance_hz=7000.,
+    )
