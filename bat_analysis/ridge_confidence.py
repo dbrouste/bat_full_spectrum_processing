@@ -69,12 +69,14 @@ def trim_weak_right_tail(
 
     rows = nearest_indices(f, x[:, 1])
     cols = nearest_indices(t, x[:, 0])
-    local_power = np.empty(len(x), dtype=float)
-    local_snr = np.empty(len(x), dtype=float)
-    for k, (ri, ci) in enumerate(zip(rows, cols)):
-        near = slice(max(ri - 1, 0), min(ri + 2, len(f)))
-        local_power[k] = float(np.max(power[near, ci]))
-        local_snr[k] = float(np.max(snr[near, ci]))
+    # Gather the same three frequency bins for every trajectory point
+    # in one NumPy operation instead of a Python loop over each frame.
+    neighbors = np.clip(
+        rows[:, None] + np.array([-1, 0, 1])[None, :],
+        0, len(f) - 1,
+    )
+    local_power = np.max(power[neighbors, cols[:, None]], axis=1)
+    local_snr = np.max(snr[neighbors, cols[:, None]], axis=1)
     path_peak = max(float(np.max(local_power)), 1e-30)
     relative_db = 10 * np.log10(np.maximum(local_power, 1e-30) / path_peak)
     supported = (local_snr >= min_snr_db) & (relative_db >= min_relative_db)
