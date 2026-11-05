@@ -70,6 +70,7 @@ def extend_ridge_edges(y, sr, curve, *, bounds_s, n_fft=512, hop=24,
         np.maximum(0, log_power - baseline[:, None]), (.6, .35)
     )
     scale = max(float(np.max(power)), 1e-30)
+    weak_skipped = {"left": 0, "right": 0}
 
     def side(direction):
         if direction == -1:
@@ -113,10 +114,13 @@ def extend_ridge_edges(y, sr, curve, *, bounds_s, n_fft=512, hop=24,
             best = int(candidate[int(np.argmax(scores))])
             if snr[best, j] < min_snr_db:
                 missing += 1
-            else:
-                missing = 0
-            if missing > max_weak_frames:
-                break
+                weak_skipped["left" if direction == -1 else "right"] += 1
+                if missing > max_weak_frames:
+                    break
+                # A weak frame can be BRIDGED when a coherent ridge resumes,
+                # but must never become a returned trajectory point itself.
+                continue
+            missing = 0
             near = np.arange(max(0, best - 2), min(len(freqs), best + 3))
             weights = np.maximum(0, snr[near, j] - 1) * np.exp(
                 -.5 * ((freqs[near] - freqs[best]) / 2500) ** 2
@@ -156,6 +160,8 @@ def extend_ridge_edges(y, sr, curve, *, bounds_s, n_fft=512, hop=24,
     diag = {
         "left_points": len(before),
         "right_points": len(after),
+        "weak_skipped_left": weak_skipped["left"],
+        "weak_skipped_right": weak_skipped["right"],
         "min_snr_db": float(min_snr_db),
         "start_time_s": float(completed[0, 0]),
         "end_time_s": float(completed[-1, 0]),
