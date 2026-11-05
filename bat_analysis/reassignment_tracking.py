@@ -5,6 +5,7 @@ previous greedy maximum follower. Detector seeds remain optional.
 """
 from __future__ import annotations
 import numpy as np
+import time
 from scipy.ndimage import gaussian_filter
 from .reassignment import reassigned_spectrogram
 
@@ -48,6 +49,7 @@ def track_reassigned_ridge(
     chirp is non-increasing in frequency. No annotations are used at inference.
     Input time_mid and duration are in seconds.
     """
+    _profile_start = time.perf_counter() if diagnostics is not None else None
     n_fft, hop = choose_reassignment_resolution(duration, n_fft, hop)
     if sr <= 0:
         raise ValueError("invalid sample rate")
@@ -101,6 +103,7 @@ def track_reassigned_ridge(
         noise_percentile=20, snr_min_db=snr_min_db,
         snr_full_db=snr_full_db,
     )
+    _profile_fft = time.perf_counter() if diagnostics is not None else None
     freqs = r["freqs_hz"]
     times_all = r["times_s"] + first / sr
     keep = (times_all >= start) & (times_all <= stop)
@@ -227,6 +230,7 @@ def track_reassigned_ridge(
                 break
         return path
 
+    _profile_dp_begin = time.perf_counter() if diagnostics is not None else None
     left = follow(-1)
     prior_velocity = None
     if len(left) >= 3:
@@ -237,6 +241,7 @@ def track_reassigned_ridge(
         ))
     path = sorted(set(left + [(anchor_col, anchor_row)]
                       + follow(1, prior_velocity)))
+    _profile_dp_end = time.perf_counter() if diagnostics is not None else None
     if len(path) < (3 if duration < 0.0012 else 4):
         if diagnostics is not None:
             diagnostics.update({"model_success": False, "stop_reason": "too_few_points"})
@@ -265,6 +270,7 @@ def track_reassigned_ridge(
                 )
     amplitude = np.sqrt(regular[row_idx, col_idx] / max(regular.max(), 1e-30))
     curve = np.column_stack([t[col_idx], ridge_frequencies, amplitude])
+    _profile_path = time.perf_counter() if diagnostics is not None else None
     completion_diag = None
     if complete_ends and len(curve) >= 3:
         from .ridge_completion import extend_ridge_edges
@@ -274,6 +280,7 @@ def track_reassigned_ridge(
             min_snr_db=extension_min_snr_db,
             return_diagnostics=True,
         )
+    _profile_completed = time.perf_counter() if diagnostics is not None else None
     tail_diag = None
     if trim_weak_tail:
         # Apply confidence checks to the ENTIRE observed ridge (global DP
@@ -287,6 +294,7 @@ def track_reassigned_ridge(
             min_relative_db=tail_min_relative_db,
             return_diagnostics=True,
         )
+    _profile_trimmed = time.perf_counter() if diagnostics is not None else None
     endpoint_diag = None
     if refine_endpoints:
         from .endpoint_refinement import refine_ridge_endpoint
@@ -296,6 +304,17 @@ def track_reassigned_ridge(
             return_diagnostics=True,
         )
     if diagnostics is not None:
+        _profile_end = time.perf_counter()
+        diagnostics["timings_ms"] = {
+            "reassignment_fft": round(1000 * (_profile_fft - _profile_start), 3),
+            "evidence_and_setup": round(1000 * (_profile_dp_begin - _profile_fft), 3),
+            "global_dp": round(1000 * (_profile_dp_end - _profile_dp_begin), 3),
+            "ridge_sampling": round(1000 * (_profile_path - _profile_dp_end), 3),
+            "completion": round(1000 * (_profile_completed - _profile_path), 3),
+            "confidence": round(1000 * (_profile_trimmed - _profile_completed), 3),
+            "endpoint": round(1000 * (_profile_end - _profile_trimmed), 3),
+            "total": round(1000 * (_profile_end - _profile_start), 3),
+        }
         diagnostics.update({
             "tracking_method": "reassignment_flattop",
             "tracking_algorithm": "second_order_global_dp",
