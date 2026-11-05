@@ -717,3 +717,82 @@ still need verification against manual annotation. No claim is made
 that every visible dotted segment from the screenshot is the direct
 output of this library; the desktop's curve drawing/simplification
 is a separate stage.
+
+## November 6 — performance optimization of Reassignment-v2
+
+The experimental tracker keeps the original FFT sizes (192/512), hop sizes,
+Flattop window, SNR thresholds, quadratic slope penalties and all
+confidence checks. The following computational kernels were accelerated
+without intentionally changing any signal-processing decisions:
+
+- **Reassignment STFT:** use NumPy stride views instead of assembling
+  overlapping frames with Python list comprehensions and `np.stack`.
+  Three separate FFTs, window definitions, output arrays, and chunking
+  are retained.
+- **Power redistribution:** replace repeated `np.add.at` updates with a
+  flat-indexed weighted `np.bincount` histogram. This performs the same
+  weighted accumulation on the same grid.
+- **Ridge dynamic programming:** precompute valid predecessor-bin indices
+  and velocity-change penalties. Evaluate all candidate-velocity
+  transitions in one NumPy operation per time frame. The original
+  score equation, argmax tie handling, slope continuity, right/left
+  conditions and traceback are retained.
+- **Waveform memory:** only the required local audio interval is checked
+  and converted to `float64`. The old code copied and scanned
+  the entire multi-second WAV for *every* chirp, including a second
+  full copy inside the ridge-completion STFT.
+- **Tail-confidence sampling:** gather the three nearby STFT frequency
+  bins for every tracked point in one vectorized operation instead
+  of a Python loop.
+
+### Reproducible microbenchmarks
+
+Local NumPy/SciPy timings on a 384 kHz WAV excerpt
+(`20261005_191936.wav`, approximately 25 ms, Flattop FFT 512,
+hop 24, 379 frames, 174 frequency bins) were:
+
+| Kernel | Before | After | Speedup |
+|---|---:|---:|---:|
+| Three windowed FFTs | 2.12 ms | 1.83 ms | 1.2x |
+| Reassignment energy scatter | 0.535 ms | 0.062 ms | 8.6x |
+| Synthetic 174x220x5-state dynamic programming | 25.88 ms | 8.18 ms | 3.2x |
+| 160-point confidence sampling | 0.785 ms | 0.034 ms | 23x |
+
+FFT and weighted-scatter arrays were numerically identical in
+local head-to-head checks. The dynamic-programming transition scores
+and predecessor trace arrays were identical in the synthetic DP
+comparison. Microbenchmarks do **not** measure complete-file speed,
+end-to-end detector performance, or Windows portable-build latency.
+
+For an approximately 5-second 384 kHz WAV loaded as float32, the full
+float64 cast measured roughly 0.66 ms per operation; casting one local
+25 ms interval took 0.0022 ms. The two paths evaluate identical audio
+samples within the selected interval.
+
+### End-to-end speed benchmark
+
+Run the **same benchmark on both checkouts**, on the same machine and WAV
+files. Ensure the analysis environment includes scipy, numpy, soundfile,
+and other bat-analysis requirements.
+
+```bash
+python -m benchmark.reassignment_speed /path/to/wavs \
+  --repeat 3 --max-candidates 20 --output speed_v2.json
+```
+
+The benchmark reports detector time separately from ridge-modelling time,
+per-file candidate and returned-track counts, median/90th-percentile
+runtime and a SHA-256 fingerprint of the generated tracks. This helps
+detect discrepancies when comparing different branches, but a hash
+difference can also reflect harmless floating-point rounding; inspect
+frequencies/times before drawing conclusions about accuracy.
+
+The new numerical regression tests are in
+`tests/test_reassignment_fastpaths.py`: they compare the optimized
+Flattop reassignment to the old `np.add.at` reference and exercise
+deterministic ridge reconstruction.
+
+**Status:** Local kernel checks have been run. Full repository CI,
+full-WAV before/after timing and annotation-quality comparison of the
+complete pipeline remain to be verified; no overall speedup figure
+is claimed yet.
