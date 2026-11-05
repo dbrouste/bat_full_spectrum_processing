@@ -24,9 +24,9 @@ def extend_ridge_edges(y, sr, curve, *, bounds_s, n_fft=512, hop=24,
     Small isolated apparent extensions are discarded. Optional diagnostics
     report the number of points added on each side.
     """
-    x = np.asarray(y, dtype=float)
+    x = np.asarray(y)
     path = np.asarray(curve, dtype=float)
-    if x.ndim != 1 or not np.isfinite(x).all() or sr <= 0:
+    if x.ndim != 1 or sr <= 0:
         raise ValueError("expected finite mono recording and positive sr")
     if path.ndim != 2 or path.shape[1] != 3 or len(path) < 3:
         raise ValueError("curve must be Nx3 with at least three observations")
@@ -52,8 +52,13 @@ def extend_ridge_edges(y, sr, curve, *, bounds_s, n_fft=512, hop=24,
         result = path.copy()
         diag = {"left_points": 0, "right_points": 0}
         return (result, diag) if return_diagnostics else result
+    # Keep the original float64 numerical path without copying an entire
+    # multi-second WAV at every detection. Validate only the local segment.
+    segment = np.asarray(x[s0:s1], dtype=np.float64)
+    if not np.isfinite(segment).all():
+        raise ValueError("expected finite mono recording and positive sr")
     freqs, times_local, coeff = stft(
-        x[s0:s1], fs=sr, window="flattop", nperseg=n_fft,
+        segment, fs=sr, window="flattop", nperseg=n_fft,
         noverlap=n_fft-hop, boundary=None, padded=False,
     )
     times = times_local + s0 / sr
