@@ -39,7 +39,8 @@ def track_reassigned_ridge(
     prior_horizon_ms=0.55, refine_endpoints=True,
     endpoint_tail_fraction=0.35, complete_ends=True,
     extension_min_snr_db=17.0, peak_anchored_window=False,
-    diagnostics=None,
+    trim_weak_tail=True, tail_min_snr_db=10.0,
+    tail_min_relative_db=-22.0, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -54,8 +55,10 @@ def track_reassigned_ridge(
         raise ValueError("penalties must be nonnegative")
     if max_step_hz is not None and max_step_hz <= 0:
         raise ValueError("max_step_hz must be positive")
-    if extension_min_snr_db < 0:
-        raise ValueError("extension_min_snr_db must be nonnegative")
+    if extension_min_snr_db < 0 or tail_min_snr_db < 0:
+        raise ValueError("SNR thresholds must be nonnegative")
+    if tail_min_relative_db >= 0:
+        raise ValueError("tail_min_relative_db must be negative")
     if anchor_time_radius_ms <= 0 or anchor_freq_radius_khz <= 0:
         raise ValueError("anchor radii must be positive")
     if (cross_seed_velocity_penalty < 0 or cross_seed_position_penalty < 0
@@ -262,6 +265,19 @@ def track_reassigned_ridge(
             min_snr_db=extension_min_snr_db,
             return_diagnostics=True,
         )
+    tail_diag = None
+    if trim_weak_tail:
+        # Apply confidence checks to the ENTIRE observed ridge (global DP
+        # plus any completion), before the frequency-only tail correction.
+        # Original STFT power and SNR are compared at each ridge location.
+        from .ridge_confidence import trim_weak_right_tail
+        curve, tail_diag = trim_weak_right_tail(
+            curve, times_s=t, freqs_hz=freqs,
+            stft_power=regular, snr_db=snr,
+            min_snr_db=tail_min_snr_db,
+            min_relative_db=tail_min_relative_db,
+            return_diagnostics=True,
+        )
     endpoint_diag = None
     if refine_endpoints:
         from .endpoint_refinement import refine_ridge_endpoint
@@ -278,6 +294,8 @@ def track_reassigned_ridge(
             "subbin_refine": bool(subbin_refine),
             "endpoint_refinement": endpoint_diag,
             "ridge_completion": completion_diag,
+            "tail_confidence": tail_diag,
+            "trim_weak_tail": bool(trim_weak_tail),
             "complete_ends": bool(complete_ends),
             "peak_anchored_window": bool(peak_anchored_window),
             "refine_endpoints": bool(refine_endpoints),
