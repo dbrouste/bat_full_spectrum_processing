@@ -540,3 +540,81 @@ the added completion algorithm with the WAVs. The complete repository
 test suite and the exact V4-to-tracker combination are **not yet
 validated in CI**, and the source screenshot had no displayed time or
 frequency coordinates with which to identify a specific WAV event.
+
+## November 5 — overlapping chirps: group or stitch
+
+Two simultaneously visible spectrogram ridges do **not** necessarily
+represent fragments of the same call. In particular, two parallel descending
+FM tracks can overlap in time yet be separated by many kHz. Joining their
+frequency values into one `f(t)` curve would be incorrect: both frequencies
+may genuinely coexist at the same instant.
+
+The experimental API therefore distinguishes:
+
+- **Overlap grouping**: one `OverlappingChirps` object contains several
+  distinct ridges, with each source identity preserved. This is the
+  appropriate representation for parallel calls like the supplied example.
+- **Coincident ridge stitching**: two fragments can be represented as a
+  single ridge only if their shared duration is at least 0.20 ms, their
+  median and 90th percentile frequency disagreements are at most
+  2.2 and 4.0 kHz, and their estimated slopes disagree by at most
+  7 kHz/ms. Stitching is conservative and optional.
+- **Possible harmonics**: concurrent tracks with a median frequency
+  ratio within 2.0 +/- 0.10 are marked as *possible* fundamental/H2
+  relationships. These are not automatically confirmed.
+
+```python
+from bat_analysis.chirp_union import group_overlapping_chirps
+
+# Input: list of separate Nx3 arrays:
+# [absolute_time_s, frequency_hz, normalized_amplitude].
+groups = group_overlapping_chirps(
+    [curve_1, curve_2], source_ids=["c1", "c2"], stitch=True
+)
+for group in groups:
+    print(group.kind, group.source_ids)
+    for separate_curve in group.ridges:
+        print(separate_curve.shape)
+    print(group.possible_harmonics)
+```
+
+The same behavior can be invoked from Adaptive V4 candidates without
+manual tracks:
+
+```python
+from bat_analysis.reassignment_tracking import track_and_group_candidates
+
+report = track_and_group_candidates(
+    y, sr, candidates=None,  # detect with Adaptive V4
+    tracking_kwargs={"complete_ends": True},
+    grouping_kwargs={"stitch": True, "min_overlap_ms": 0.20},
+)
+for group in report["groups"]:
+    # Keep two or more independent curves when they merely overlap in time.
+    print(group.kind, group.stitched_sources)
+print(report["untracked_candidate_indices"])
+```
+
+The `kind` is `"single"` (one original track),
+`"stitched"` (coincident fragments joined), or `"overlapping"`
+(multiple independent ridges remain inside the group). In a group
+containing both stitched fragments and a distinct parallel call,
+`stitched_sources` still maps each final ridge to its original inputs.
+
+**Important**: an overlap group does not establish that two calls came
+from one bat. Do not count groups as passages, and do not count an
+associated harmonic as an independent call. For the desktop application,
+display the group's ridges as separate polylines, rather than
+averaging two different simultaneous frequencies together.
+
+### Annotation cross-check
+
+Among the four manually annotated Nycto WAVs, 14 pairs overlap by at
+least 0.20 ms; all 14 pairs occur in `20261005_191947.wav`.
+Their shared frequencies are consistent with a roughly 2:1 relation,
+and **none** meets the conservative coincident-ridge stitch criteria
+when evaluated against PCHIP interpolated manual points.
+
+The exact tracking-to-grouping integration has not yet been measured
+end-to-end; these checks validate overlap semantics rather than
+precision, recall, or full detector performance.
