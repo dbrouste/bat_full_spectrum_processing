@@ -66,9 +66,13 @@ def reassigned_spectrogram(
     z = np.empty((len(selected), len(starts)), dtype=np.complex128)
     zt = np.empty_like(z)
     zd = np.empty_like(z)
+    # A non-copying view replaces hundreds of per-frame Python slices
+    # stacked into new arrays. The subsequent FFT products remain float64
+    # and use the exact same samples, windows and chunk boundaries.
+    all_frames = np.lib.stride_tricks.sliding_window_view(x, n_fft)[::hop]
     for k in range(0, len(starts), chunk_frames):
         end = min(k + chunk_frames, len(starts))
-        frames = np.stack([x[s:s + n_fft] for s in starts[k:end]])
+        frames = all_frames[k:end]
         z[:, k:end] = np.fft.rfft(frames * g, axis=1)[:, selected].T
         zt[:, k:end] = np.fft.rfft(frames * gt, axis=1)[:, selected].T
         zd[:, k:end] = np.fft.rfft(frames * gd, axis=1)[:, selected].T
@@ -94,8 +98,14 @@ def reassigned_spectrogram(
     valid = (stable & np.isfinite(t_hat) & np.isfinite(f_hat)
              & (fi >= 0) & (fi < len(selected))
              & (ti >= 0) & (ti < len(times)))
-    assigned = np.zeros_like(power)
-    np.add.at(assigned, (fi[valid], ti[valid]), (power * fade)[valid])
+    # Histogram accumulation is equivalent to np.add.at on the flat
+    # time/frequency grid, but avoids thousands of slow scatter updates.
+    flat_indices = fi[valid] * len(times) + ti[valid]
+    assigned = np.bincount(
+        flat_indices,
+        weights=(power * fade)[valid],
+        minlength=power.size,
+    ).reshape(power.shape)
     return {
         "freqs_hz": freqs[selected],
         "times_s": times,
