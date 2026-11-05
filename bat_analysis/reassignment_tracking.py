@@ -327,3 +327,50 @@ def track_reassigned_candidate(y, sr, candidate: dict, *, use_broad_seed=True,
         diagnostics=diagnostics,
         **kwargs,
     )
+
+
+def track_and_group_candidates(
+    y, sr, candidates=None, *, tracking_kwargs=None, grouping_kwargs=None,
+):
+    """Track Adaptive V4 candidates and group their overlapping trajectories.
+
+    Returns a dict with 'groups', 'untracked_candidate_indices',
+    'candidate_count' and 'tracking_diagnostics'. Each group contains
+    independent trajectories unless the shared frequency/slope supports a
+    conservative stitch. Grouping is NOT evidence of a single bat passage.
+
+    If candidates is None, the stable Adaptive V4 candidate detector is used.
+    None of the annotated/manual tracks is required.
+    """
+    from .chirp_union import group_overlapping_chirps
+    if candidates is None:
+        from .detection import detect_candidates_snr_blobs
+        candidates = detect_candidates_snr_blobs(
+            y, sr, slope_filter_mode="adaptive_v4"
+        )
+    candidates = list(candidates)
+    kwargs = dict(tracking_kwargs or {})
+    groups_kwargs = dict(grouping_kwargs or {})
+    successes = []
+    indices = []
+    failed = []
+    diagnostics = []
+    for index, candidate in enumerate(candidates):
+        detail = {}
+        curve = track_reassigned_candidate(
+            y, sr, candidate, diagnostics=detail, **kwargs
+        )
+        diagnostics.append(detail)
+        if curve is None:
+            failed.append(index)
+        else:
+            successes.append(curve)
+            indices.append(index)
+    return {
+        "groups": group_overlapping_chirps(
+            successes, source_ids=indices, **groups_kwargs
+        ),
+        "untracked_candidate_indices": failed,
+        "candidate_count": len(candidates),
+        "tracking_diagnostics": diagnostics,
+    }
