@@ -64,7 +64,7 @@ def track_reassigned_ridge(
     if (cross_seed_velocity_penalty < 0 or cross_seed_position_penalty < 0
             or prior_horizon_ms < 0):
         raise ValueError("cross-seed penalties and horizon must be nonnegative")
-    y = np.asarray(y, dtype=float)
+    y = np.asarray(y)
     if y.ndim != 1 or not np.isfinite(y).all():
         raise ValueError("expected finite mono audio")
     if time_bounds_s is None:
@@ -91,7 +91,7 @@ def track_reassigned_ridge(
     # Limit reassignment computation to the local window. Keep the full
     # 20-150 kHz band so large FM sweeps do not get cut off by a seed.
     r = reassigned_spectrogram(
-        y[first:last], sr, n_fft=n_fft, hop=hop,
+        np.asarray(y[first:last], dtype=np.float64), sr, n_fft=n_fft, hop=hop,
         fmin=20000, fmax=min(150000, sr / 2),
         noise_percentile=20, snr_min_db=snr_min_db,
         snr_full_db=snr_full_db,
@@ -150,55 +150,58 @@ def track_reassigned_ridge(
     rows, columns = evidence.shape
 
     def follow(direction, prior_velocity=None):
+        """Exact vectorized DP over frequency-bin and slope-bin states.
+
+        Precompute the admissible predecessor frequencies for every
+        possible velocity, then maximize across predecessor velocities in
+        one NumPy operation per frame. This preserves the old transition
+        scores and tie-breaking, without the Python loop over velocities.
+        """
         score = np.full((rows, len(velocities)), -1e9)
         if prior_velocity is None:
             score[anchor_row, :] = 0.0
         else:
-            # Pass the left-side approach velocity to the right-side DP
-            # without making it a hard constraint.
             score[anchor_row, :] = (
                 -cross_seed_velocity_penalty * (velocities - prior_velocity) ** 2
             )
+
+        row_indices = np.arange(rows)
+        prev = row_indices[:, None] + direction * velocities[None, :]
+        admissible = (prev >= 0) & (prev < rows)
+        safe_prev = np.clip(prev, 0, rows - 1)
+        previous_rows = np.where(admissible, prev, -1).astype(np.int32)
+        # Layout: [candidate velocity, previous velocity].
+        transition_cost = jump_penalty * (
+            velocities[:, None] - velocities[None, :]
+        ) ** 2
         backtrace = []
         best_score = -1e9
         best_depth = 0
         best_row = anchor_row
         best_velocity = 0
-        row_indices = np.arange(rows)
+
         for depth in range(1, columns):
             col = anchor_col + direction * depth
             if col < 0 or col >= columns:
                 break
-            new = np.full_like(score, -1e9)
-            prev_rows = np.full(score.shape, -1, dtype=np.int32)
-            prev_vel = np.full(score.shape, -1, dtype=np.int16)
-            for v in velocities:
-                # Frequency declines as time increases, in both directions.
-                previous = row_indices + direction * v
-                valid = (previous >= 0) & (previous < rows)
-                if not valid.any():
-                    continue
-                delta_v = velocities - v
-                transition = score[previous[valid], :] - jump_penalty * delta_v[None, :] ** 2
-                choices = np.argmax(transition, axis=1)
-                rr = row_indices[valid]
-                new[rr, v] = (
-                    transition[np.arange(len(rr)), choices]
-                    + 2.5 * evidence[rr, col] - gap_penalty
-                )
-                if (prior_velocity is not None
-                        and depth * dt < prior_horizon_ms / 1000.0):
-                    # Keep the initial right-side trajectory near the
-                    # continuation of the slope measured on the left.
-                    # The prior vanishes after a short transition horizon.
-                    predicted_row = anchor_row - prior_velocity * depth
-                    new[rr, v] -= (
-                        cross_seed_position_penalty *
-                        (rr - predicted_row) ** 2
-                    )
-                prev_rows[rr, v] = previous[valid]
-                prev_vel[rr, v] = choices
-            backtrace.append((prev_rows, prev_vel))
+
+            transitions = score[safe_prev, :] - transition_cost[None, :, :]
+            choices = np.argmax(transitions, axis=2)
+            best_transition = np.take_along_axis(
+                transitions, choices[..., None], axis=2
+            )[..., 0]
+            new = best_transition + 2.5 * evidence[:, col, None] - gap_penalty
+            if (prior_velocity is not None
+                    and depth * dt < prior_horizon_ms / 1000.0):
+                predicted_row = anchor_row - prior_velocity * depth
+                new -= cross_seed_position_penalty * (
+                    row_indices[:, None] - predicted_row
+                ) ** 2
+            new[~admissible] = -1e9
+            previous_velocities = np.where(
+                admissible, choices, -1
+            ).astype(np.int16)
+            backtrace.append((previous_rows, previous_velocities))
             score = new
             row, vel = np.unravel_index(np.argmax(score), score.shape)
             if score[row, vel] > best_score:
@@ -206,6 +209,7 @@ def track_reassigned_ridge(
                 best_depth = depth
                 best_row = int(row)
                 best_velocity = int(vel)
+
         if best_depth == 0:
             return []
         row, vel = best_row, best_velocity
