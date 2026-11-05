@@ -618,3 +618,84 @@ when evaluated against PCHIP interpolated manual points.
 The exact tracking-to-grouping integration has not yet been measured
 end-to-end; these checks validate overlap semantics rather than
 precision, recall, or full detector performance.
+
+## Reassignment-v2 — preventing late noise tracking
+
+**This section applies to the `Reassignment-v2` branch only.**
+`Reassignment` and `main` have not been changed.
+
+### Root causes
+
+In the desktop application's `ridge_worker.py`, the detection duration
+was passed as milliseconds into `process_full_spectrum()`, which expects
+seconds. The application also passed the bbox midpoint while the
+experimental model expects the energy-peak time and can use explicit
+detection start/end bounds. The companion
+`Bat-Acoustic-Analyser/Reassignment-v2` branch fixes both and reconstructs
+the WAV timestamp using the same 15 ms chunk offset as the model.
+
+The prior `extend_ridge_edges` kept up to two below-threshold SNR frames
+**in its actual returned curve**, allowing a weak ending to bridge into a
+separate noise feature. The new implementation skips those frames (without
+returning synthetic values) and only bridges them internally when coherent
+above-threshold energy resumes promptly.
+
+A second conservative guard, `trim_weak_right_tail`, examines the **entire
+tracked ridge** after any completion and before the existing frequency-only
+endpoint correction. It trims a trailing suffix only if both conditions
+fail for at least four consecutive points:
+
+- Flattop STFT SNR at the ridge frequency: `>= 10 dB`.
+- Power relative to the strongest point **on that same ridge**:
+  `>= -22 dB`.
+
+The guard preserves the first eight points and, by default, trims no more
+than 45% of a curve in one operation. It does not alter timestamps or
+frequencies of retained points. Small/short chirps are treated
+conservatively. Diagnostics are reported as
+`diagnostics["tail_confidence"]["trimmed_right_points"]` and
+`diagnostics["ridge_completion"]["weak_skipped_right"]`.
+
+### Experimental parameters
+
+The `Reassignment-v2` defaults are:
+
+```python
+curve = process_full_spectrum(
+    y, sr, time_mid=peak_time_seconds,
+    duration=duration_seconds,
+    seed_freq_hz=peak_frequency_hz,
+    chirp_start_s=detector_start_seconds,
+    chirp_end_s=detector_end_seconds,
+    tracking_method="reassignment_flattop",
+    reassignment_complete_ends=True,
+    reassignment_extension_min_snr_db=17.0,
+    reassignment_trim_weak_tail=True,
+    reassignment_tail_min_snr_db=10.0,
+    reassignment_tail_min_relative_db=-22.0,
+    diagnostics={},
+)
+```
+
+To A/B test the noise-tail filter without changing the rest of the
+tracking pipeline, use `reassignment_trim_weak_tail=False`. The
+extension itself can be disabled separately using
+`reassignment_complete_ends=False`.
+
+### Reproduction on the annotated event
+
+In `20261005_191936.wav`, manually annotated chirp #4 runs from about
+795.83 to 797.19 ms. The raw Flattop STFT around its annotated FM
+trajectory has strong energy at 797.15 ms (~23 dB local SNR),
+but the extrapolated direction drops to ~1.5 dB at 797.60 ms.
+A more distant low-frequency feature can have more SNR again (~11.8 dB
+at 798.00 ms), which explains why a permissive gap mechanism could
+follow it. These numbers come from a local STFT diagnostic on the
+real WAV, not a complete CI-validated tracker benchmark.
+
+The filtering adds a safeguard against those mistakes. Its true recall
+effect on faint chirps and its impact on more varied field recordings
+still need verification against manual annotation. No claim is made
+that every visible dotted segment from the screenshot is the direct
+output of this library; the desktop's curve drawing/simplification
+is a separate stage.
