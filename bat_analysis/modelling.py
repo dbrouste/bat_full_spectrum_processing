@@ -171,6 +171,22 @@ def process_full_spectrum(
     broad_fm_seed_freq_hz: float | None = None,
     broad_fm_seed_slope_hz_per_ms: float | None = None,
     diagnostics: dict | None = None,
+    tracking_method: str = "reassignment_flattop",
+    reassignment_n_fft: int | None = None,
+    reassignment_hop: int | None = None,
+    reassignment_subbin_refine: bool = True,
+    reassignment_refine_endpoints: bool = True,
+    reassignment_complete_ends: bool = True,
+    reassignment_extension_min_snr_db: float = 17.0,
+    reassignment_trim_weak_tail: bool = True,
+    reassignment_tail_min_snr_db: float = 10.0,
+    reassignment_tail_min_relative_db: float = -22.0,
+    reassignment_peak_anchored_window: bool = True,
+    reassignment_cross_seed_velocity_penalty: float = 0.6,
+    reassignment_cross_seed_position_penalty: float = 0.01,
+    chirp_start_s: float | None = None,
+    chirp_end_s: float | None = None,
+    broad_fm_seed_time_s: float | None = None,
 ):
     """Model a detected chirp without the historical 0.7 amplitude gate.
 
@@ -180,6 +196,54 @@ def process_full_spectrum(
     globally strongest component. Omitting it preserves the previous no-gate
     behaviour.
     """
+    if tracking_method not in ("legacy", "reassignment_flattop"):
+        raise ValueError("tracking_method must be 'legacy' or 'reassignment_flattop'")
+    if tracking_method == "reassignment_flattop":
+        from .reassignment_tracking import track_reassigned_ridge
+
+        if diagnostics is not None:
+            diagnostics.clear()
+        # Match the legacy return convention: times relative to the
+        # 15-ms chunk extracted around time_mid, not absolute WAV times.
+        chunk_start = max(0, int((time_mid - 0.0075) * sr)) / sr
+        # A coarse broad-FM seed must use the matching time of the
+        # coarse-seed estimator, not the peak time of another component.
+        use_coarse = (
+            broad_fm_seed_freq_hz is not None and np.isfinite(broad_fm_seed_freq_hz)
+            and broad_fm_seed_time_s is not None and np.isfinite(broad_fm_seed_time_s)
+        )
+        chosen_seed_time = float(broad_fm_seed_time_s) if use_coarse else float(time_mid)
+        chosen_seed_freq = (
+            float(broad_fm_seed_freq_hz) if use_coarse else seed_freq_hz
+        )
+        bounds = (
+            (float(chirp_start_s), float(chirp_end_s))
+            if chirp_start_s is not None and chirp_end_s is not None
+            else None
+        )
+        curve = track_reassigned_ridge(
+            y_use, sr, time_mid=chosen_seed_time, duration=duration,
+            seed_freq_hz=chosen_seed_freq, time_bounds_s=bounds,
+            n_fft=reassignment_n_fft, hop=reassignment_hop,
+            subbin_refine=reassignment_subbin_refine,
+            refine_endpoints=reassignment_refine_endpoints,
+            complete_ends=reassignment_complete_ends,
+            extension_min_snr_db=reassignment_extension_min_snr_db,
+            trim_weak_tail=reassignment_trim_weak_tail,
+            tail_min_snr_db=reassignment_tail_min_snr_db,
+            tail_min_relative_db=reassignment_tail_min_relative_db,
+            peak_anchored_window=reassignment_peak_anchored_window,
+            cross_seed_velocity_penalty=reassignment_cross_seed_velocity_penalty,
+            cross_seed_position_penalty=reassignment_cross_seed_position_penalty,
+            diagnostics=diagnostics,
+        )
+        if curve is not None:
+            curve[:, 0] -= chunk_start
+        elif diagnostics is not None:
+            diagnostics["model_success"] = False
+            diagnostics["final_points"] = 0
+        return curve
+
     y_chun = base.Extract_chunk_of_audio(y_use, sr, time_mid)
 
     if diagnostics is not None:

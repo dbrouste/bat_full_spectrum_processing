@@ -182,7 +182,7 @@ For reproducible comparisons with earlier detectors, pass an explicit mode, e.g.
 - **adaptive_lowfreq** — legacy-compatible detector with an additional shallow low-frequency branch;
 - **adaptive_v2** — general + low-frequency branches with time/frequency NMS;
 - **adaptive_v3** — v2 plus a high-frequency recovery branch and bounding-box duplicate filtering;
-- **adaptive_v4** — current conservative refinement developed after freezing a grouped development/hold-out split.
+- **adaptive_v4** — current conservative refinement developed after freezing a grouped development/hold-out split. On Reassignment-v2, the minimum general-blob width is 1.33 ms (previously 1.5 ms) to improve short, steep FM-call recall. The previous behaviour remains available via `v4_general_min_width_ms=1.5`.
 
 The older modes are intentionally retained to make regression testing possible.
 
@@ -199,6 +199,21 @@ Compared with the historical implementation, the current pipeline can use detect
 This is particularly useful when fundamentals, harmonics, or simultaneous calls are present.
 
 The modelling code also uses an adaptive tracking step bounded between 40 and 60 microseconds. Longer and low-frequency calls can therefore be followed with fewer iterations while short/steep calls keep the finer historical step.
+
+For Flattop reassignment, detector-provided time bounds receive **1.5 ms
+of tracking search margin on each side**, rising smoothly to 2.0 ms for
+detected durations at or below 1 ms. The detector's bounding box may include
+only the strongest part of a descending FM call; the wider search can recover
+an earlier portion of a steep chirp. Unbounded tracking retains its original
+1.0 ms margin. Explicit `search_margin_ms` overrides remain supported. No
+manual annotation is used during tracking.
+
+After tracking and frequency refinement, a conservative right-tail check
+stops a descending FM ridge when it **rebounds sharply and persistently**
+onto an echo. It requires an established frequency drop and at least five
+following observations, so small endpoint fluctuations are preserved. The
+option `trim_echo_rebound=False` disables this check for comparisons; the
+benchmark accepts `--no-echo-trim` to reproduce the previous behavior.
 
 Example using a detector candidate:
 
@@ -253,6 +268,78 @@ The `benchmark/` package currently contains metrics for two separate questions:
 2. **Curve reconstruction** — how closely does the reconstructed frequency/time curve match the manual annotation?
 
 Keeping these stages separate makes it possible to distinguish detector errors from ridge/modelling errors.
+
+### SNR-weighted benchmark (Reassignment-v2)
+
+The end-to-end benchmark uses the same Adaptive V4 detector and Flattop
+reassignment tracker as the application. Manual annotations are **only** used
+for matching/scoring: they are never used to seed the detector or tracker.
+Ground truth requires both `source: "manual"` and `status: "validated"`.
+Automatic proposals, even if accidentally marked validated, and manual drafts
+are excluded. Unmatched manual chirps still appear in the JSON report.
+
+```bash
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --output reassignment_v2.json
+```
+
+For each manual chirp, the benchmark calculates an independent SNR profile on
+its PCHIP reference trajectory using a fixed **Flattop 512 / hop 64 STFT** and
+a frequency-specific median noise floor. This reference stays the same when
+the tracker changes. The allowed frequency error is interpolated continuously:
+
+| Local SNR | Frequency tolerance |
+| --- | ---: |
+| 15 dB or lower | 5 kHz |
+| 25 dB | 4 kHz |
+| 35 dB or higher | 3 kHz |
+
+The report includes the maximum/90th-percentile SNR, raw error in kHz,
+mean error divided by the local SNR tolerance, fraction of reference times
+within tolerance, time coverage, and start/end errors. Scores cover the full
+manual interval, including missing endpoints. Detection precision/recall and
+failed tracking remain distinct from the frequency scores. The report also
+groups recall by peak SNR and offers a **full-pipeline within-tolerance score**
+that counts missed manual chirps as zero, so excellent fits on a small subset
+cannot hide poor detector recall. The originating
+Git commit is saved in report metadata.
+
+**Missed-call importance:** benchmark recall is also weighted by each
+validated manual chirp's maximum SNR: weight 0.2 at or below 15 dB, rising
+linearly to 1.0 at or above 35 dB. Weak calls therefore still count, but
+missing a high-SNR call incurs a larger penalty. These weights affect
+**evaluation only**: manual annotations never influence automatic detection.
+The minimum weight can be adjusted via `--low-snr-weight 0.2` (the default).
+
+To compare both detector settings on the same commit, the benchmark can
+reproduce the former 1.5 ms minimum blob width:
+
+```bash
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --general-min-width-ms 1.5 --output previous_detector.json
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --output current_detector.json
+```
+
+To compare two runs of this benchmark (for example before and after a
+Reassignment-v2 change), keep the WAV/annotation dataset and settings the same:
+
+```bash
+python -m benchmark.compare_reports baseline.json modified.json \
+  --output comparison.json --html comparison.html
+```
+
+The HTML page interactively plots each shared manual chirp's peak SNR against
+the normalized error before and after. `comparison.json` records improvements,
+regressions, gained/lost matches, and per-chirp deltas. Both input runs must
+contain the SNR-weighted fields to compare those particular scores.
+
+The numeric SNR is an estimate relative to that WAV's STFT noise floor, not an
+absolute calibrated acoustic SNR. Do not compare it against a different SNR
+estimator without recalibration.
 
 ## Ground-truth strategy
 
