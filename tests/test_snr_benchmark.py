@@ -5,7 +5,9 @@ import pytest
 import soundfile as sf
 
 from benchmark.manual_annotations import validated_manual_chirps
-from benchmark.snr_metrics import ReferenceSNR, compare_trajectory, tolerance_khz
+from benchmark.snr_metrics import (
+    ReferenceSNR, compare_trajectory, tolerance_khz, detection_importance,
+)
 from benchmark import reassignment_detector_seeds as detector_benchmark
 from benchmark.compare_reports import compare_reports
 
@@ -32,6 +34,46 @@ def test_manual_annotations_exclude_every_automatic_proposal_and_draft():
 def test_requested_snr_tolerances_and_linear_interpolation():
     result = tolerance_khz([-10, 15, 20, 25, 30, 35, 80])
     np.testing.assert_allclose(result, [5, 5, 4.5, 4, 3.5, 3, 3])
+
+
+def test_high_snr_missed_calls_are_more_costly_than_low_snr_misses():
+    from benchmark.reassignment_detector_seeds import summarize_importance
+
+    np.testing.assert_allclose(
+        detection_importance([5, 15, 25, 35, 50]),
+        [.2, .2, .6, 1., 1.])
+    strong_found = [
+        {"detection_importance_weight": 1., "detector_matched": True,
+         "within_snr_tolerance_fraction": 1.},
+        {"detection_importance_weight": .2, "detector_matched": False},
+    ]
+    weak_found = [
+        {"detection_importance_weight": 1., "detector_matched": False},
+        {"detection_importance_weight": .2, "detector_matched": True,
+         "within_snr_tolerance_fraction": 1.},
+    ]
+    assert summarize_importance(strong_found)["weighted_detector_recall"] == pytest.approx(1 / 1.2)
+    assert summarize_importance(weak_found)["weighted_detector_recall"] == pytest.approx(.2 / 1.2)
+
+
+def test_adaptive_v4_recovers_steep_short_but_not_tiny_blobs(monkeypatch):
+    from bat_analysis import detection
+
+    blob = {"size": 40, "height_hz": 18000.0,
+            "slope_hz_per_ms": -20000.0, "width_ms": 1.3333,
+            "peak_db": -52., "time_mid": .010, "peak_freq_hz": 85000.,
+            "f_high": 100000., "f_low": 82000.,
+            "t_start": .0095, "t_end": .01083}
+    tiny = {**blob, "width_ms": .67, "time_mid": .025}
+    monkeypatch.setattr(detection, "_extract_candidates",
+                        lambda *args, **kwargs: [blob, tiny])
+    y = np.zeros(2048)
+    current = detection.detect_candidates_snr_blobs(y, 384000)
+    previous = detection.detect_candidates_snr_blobs(
+        y, 384000, v4_general_min_width_ms=1.5)
+    assert len(current) == 1
+    assert current[0]["width_ms"] == pytest.approx(1.3333)
+    assert previous == []
 
 
 class _ConstantSNR:
@@ -98,11 +140,14 @@ def test_end_to_end_benchmark_counts_only_manual_and_scores_unmatched(tmp_path, 
     monkeypatch.setattr(detector_benchmark, "track_reassigned_candidate",
                         lambda *args, **kwargs:
                         np.array([[0.02, 30_000], [0.022, 25_000]]))
-    report = detector_benchmark.evaluate(json_path, tmp_path)
+    report = detector_benchmark.evaluate(
+        json_path, tmp_path, low_snr_importance_weight=.35)
     assert report["totals"]["annotated"] == 2
     assert report["totals"]["ignored_automatic_proposals"] == 2
     assert report["totals"]["matched"] == 1
     assert report["totals"]["tracked"] == 1
+    assert report["totals"]["detection_importance"]["at_or_below_15_db"] == .35
+    assert report["details"][0]["detection_importance_weight"] == pytest.approx(.35)
     assert report["totals"]["full_pipeline_within_tolerance_fraction"] <= 0.5
     assert sum(x["annotated"] for x in report["totals"]["by_snr"].values()) == 2
     assert [item["chirp_id"] for item in report["details"]] == [1, 2]

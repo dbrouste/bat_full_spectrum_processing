@@ -170,7 +170,7 @@ For reproducible comparisons with earlier detectors, pass an explicit mode, e.g.
 - **adaptive_lowfreq** — legacy-compatible detector with an additional shallow low-frequency branch;
 - **adaptive_v2** — general + low-frequency branches with time/frequency NMS;
 - **adaptive_v3** — v2 plus a high-frequency recovery branch and bounding-box duplicate filtering;
-- **adaptive_v4** — current conservative refinement developed after freezing a grouped development/hold-out split.
+- **adaptive_v4** — current conservative refinement developed after freezing a grouped development/hold-out split. On Reassignment-v2, the minimum general-blob width is 1.33 ms (previously 1.5 ms) to improve short, steep FM-call recall. The previous behaviour remains available via `v4_general_min_width_ms=1.5`.
 
 The older modes are intentionally retained to make regression testing possible.
 
@@ -285,6 +285,25 @@ groups recall by peak SNR and offers a **full-pipeline within-tolerance score**
 that counts missed manual chirps as zero, so excellent fits on a small subset
 cannot hide poor detector recall. The originating
 Git commit is saved in report metadata.
+
+**Missed-call importance:** benchmark recall is also weighted by each
+validated manual chirp's maximum SNR: weight 0.2 at or below 15 dB, rising
+linearly to 1.0 at or above 35 dB. Weak calls therefore still count, but
+missing a high-SNR call incurs a larger penalty. These weights affect
+**evaluation only**: manual annotations never influence automatic detection.
+The minimum weight can be adjusted via `--low-snr-weight 0.2` (the default).
+
+To compare both detector settings on the same commit, the benchmark can
+reproduce the former 1.5 ms minimum blob width:
+
+```bash
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --general-min-width-ms 1.5 --output previous_detector.json
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --output current_detector.json
+```
 
 To compare two runs of this benchmark (for example before and after a
 Reassignment-v2 change), keep the WAV/annotation dataset and settings the same:

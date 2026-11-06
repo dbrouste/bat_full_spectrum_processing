@@ -20,6 +20,19 @@ def tolerance_khz(snr_db):
     return np.interp(values, [15.0, 35.0], [5.0, 3.0])
 
 
+def detection_importance(snr_max_db, *, min_weight=0.2):
+    """Importance of finding a manual call, weighted by its peak reference SNR.
+
+    A quiet call retains a nonzero contribution so the detector is never
+    rewarded for ignoring low-SNR data altogether. Default endpoints:
+    <=15 dB: 0.2, >=35 dB: 1.0; linear interpolation between them.
+    """
+    if not 0 < min_weight <= 1:
+        raise ValueError("min_weight must be in (0, 1]")
+    return np.interp(np.asarray(snr_max_db, dtype=float),
+                     [15.0, 35.0], [min_weight, 1.0])
+
+
 @dataclass
 class ReferenceSNR:
     """A fixed SNR image, using the same units for every benchmark run."""

@@ -22,7 +22,30 @@ from bat_analysis.detection import detect_candidates_snr_blobs
 from bat_analysis.reassignment_tracking import track_reassigned_candidate
 from bat_analysis.harmonics import detect_harmonic_segments
 from benchmark.manual_annotations import validated_manual_chirps
-from benchmark.snr_metrics import ReferenceSNR, compare_trajectory
+from benchmark.snr_metrics import (
+    ReferenceSNR, compare_trajectory, detection_importance,
+)
+
+
+def summarize_importance(details):
+    """High-SNR misses contribute more to recall than low-SNR misses."""
+    if not details:
+        return {"weighted_detector_recall": None,
+                "weighted_full_pipeline_within_tolerance_fraction": None,
+                "weighted_missed_chirp_mass": 0.0,
+                "total_chirp_importance": 0.0}
+    weights = np.asarray([x["detection_importance_weight"] for x in details])
+    matched = np.asarray([bool(x.get("detector_matched")) for x in details])
+    within = np.asarray([x.get("within_snr_tolerance_fraction", 0.0)
+                         for x in details])
+    total = float(np.sum(weights))
+    return {
+        "weighted_detector_recall": float(np.dot(weights, matched) / total),
+        "weighted_full_pipeline_within_tolerance_fraction": (
+            float(np.dot(weights, within) / total)),
+        "weighted_missed_chirp_mass": float(np.sum(weights[~matched])),
+        "total_chirp_importance": total,
+    }
 
 
 def summarize_by_snr(details):
@@ -101,7 +124,10 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
 
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
              max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
-             complete_ends=True):
+             complete_ends=True, v4_general_min_width_ms=None,
+             low_snr_importance_weight=0.2):
+    if not 0 < low_snr_importance_weight <= 1:
+        raise ValueError("low_snr_importance_weight must be in (0, 1]")
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
     per_file = []
     details = []
@@ -124,11 +150,17 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                         detector_matched=False, tracking_success=False)
             item.update(compare_trajectory(
                 reference, t[0], t[-1], None, snr_reference))
+            item["detection_importance_weight"] = float(
+                detection_importance(
+                    item["snr_max_db"], min_weight=low_snr_importance_weight))
             file_details.append(item)
         details.extend(file_details)
         # Run the exact library detector, not a locally reimplemented proxy.
+        detector_kwargs = ({"v4_general_min_width_ms": v4_general_min_width_ms}
+                           if v4_general_min_width_ms is not None else {})
         candidates = detect_candidates_snr_blobs(
-            np.asarray(y), int(sr), slope_filter_mode="adaptive_v4"
+            np.asarray(y), int(sr), slope_filter_mode="adaptive_v4",
+            **detector_kwargs,
         )
         matches = match_candidates(candidates, manual)
         summary = dict(file=wav_name, annotated=len(manual),
@@ -200,6 +232,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                 float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
                                for x in file_details])) if file_details else None),
             by_snr=summarize_by_snr(file_details),
+            **summarize_importance(file_details),
         )
         per_file.append(summary)
     totals = dict(
@@ -228,10 +261,15 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
                        for x in details])) if details else None)
     totals["by_snr"] = summarize_by_snr(details)
+    totals.update(summarize_importance(details))
     totals["ignored_automatic_proposals"] = sum(
         x.get("ignored_automatic_proposals", 0) for x in per_file)
     totals["snr_tolerance_khz"] = {"at_or_below_15_db": 5.0,
                                     "at_or_above_35_db": 3.0}
+    totals["detection_importance"] = {
+        "at_or_below_15_db": float(low_snr_importance_weight),
+        "at_or_above_35_db": 1.0,
+    }
     repo_root = Path(__file__).resolve().parents[1]
     try:
         commit = subprocess.check_output(
@@ -254,6 +292,10 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             "n_fft": n_fft,
             "hop": hop,
             "max_per_file": max_per_file,
+            "v4_general_min_width_ms": (
+                1.33 if v4_general_min_width_ms is None
+                else v4_general_min_width_ms),
+            "low_snr_importance_weight": float(low_snr_importance_weight),
         },
         "totals": totals, "per_file": per_file, "details": details,
     }
@@ -270,6 +312,12 @@ def main():
     parser.add_argument("--no-completion", action="store_true")
     parser.add_argument("--harmonics", action="store_true",
                         help="Report secondary harmonic segments linked to V4 candidates")
+    parser.add_argument("--general-min-width-ms", type=float, default=None,
+                        help="Override Adaptive V4 minimum general blob width; "
+                             "1.5 reproduces the previous Reassignment-v2 setting")
+    parser.add_argument("--low-snr-weight", type=float, default=0.2,
+                        help="Importance for a manually annotated chirp at <=15 dB; "
+                             "defaults to 0.2, rising linearly to 1 at >=35 dB")
     parser.add_argument("--output", default=None,
                         help="Optional output JSON report")
     args = parser.parse_args()
@@ -277,7 +325,9 @@ def main():
         args.annotations, args.wav_dir, n_fft=args.n_fft, hop=args.hop,
         max_per_file=args.max_per_file, use_broad_seed=not args.no_broad_seed,
         evaluate_harmonics=args.harmonics,
-        complete_ends=not args.no_completion
+        complete_ends=not args.no_completion,
+        v4_general_min_width_ms=args.general_min_width_ms,
+        low_snr_importance_weight=args.low_snr_weight,
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:

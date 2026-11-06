@@ -19,7 +19,9 @@ adaptive_v4
     Independent-dataset refinement: removes the unhelpful high-frequency
     recovery branch, rejects very short general blobs, and keeps only long,
     shallow low-frequency blobs. Developed after freezing a grouped
-    development/hold-out split of the 61-WAV validation dataset.
+    development/hold-out split of the 61-WAV validation dataset. On
+    Reassignment-v2, the general width threshold was relaxed from 1.5 to
+    1.33 ms to retain short, steep FM components.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -232,7 +234,7 @@ def detect_candidates_snr_blobs(
     highfreq_max_blob_slope_hz_per_ms: float = -1000.0,
     bbox_dedup_time_iou: float = 0.20,
     bbox_dedup_freq_iou: float = 0.40,
-    v4_general_min_width_ms: float = 1.5,
+    v4_general_min_width_ms: float = 1.33,
     v4_lowfreq_min_width_ms: float = 3.0,
     v4_lowfreq_min_slope_hz_per_ms: float = -1500.0,
 ):
