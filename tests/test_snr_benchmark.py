@@ -150,6 +150,11 @@ def test_end_to_end_benchmark_counts_only_manual_and_scores_unmatched(tmp_path, 
     assert report["details"][0]["detection_importance_weight"] == pytest.approx(.35)
     assert report["totals"]["full_pipeline_within_tolerance_fraction"] <= 0.5
     assert sum(x["annotated"] for x in report["totals"]["by_snr"].values()) == 2
+    active_groups = [x for x in report["totals"]["by_snr"].values()
+                     if x["tracking_succeeded"]]
+    assert len(active_groups) == 1
+    assert active_groups[0]["mean_tracking_error_khz"] is not None
+    assert active_groups[0]["mean_coverage_fraction"] is not None
     assert [item["chirp_id"] for item in report["details"]] == [1, 2]
     assert report["details"][0]["detector_matched"]
     assert not report["details"][1]["detector_matched"]

@@ -50,10 +50,11 @@ def track_reassigned_ridge(
     Input time_mid and duration are in seconds.
 
     Detector time bounds often cover only the most energetic part of a full
-    FM sweep. A bounded candidate therefore gets 1.5 ms of search margin per
-    side (rather than the former 1.0 ms). Unbounded/oracle-seeded tracking
-    retains its previous 1.0 ms default. The ridge is still determined only
-    by spectral evidence, not by annotations.
+    FM sweep. A bounded candidate gets 1.5 ms of search margin per side, rising
+    smoothly to 2.0 ms when the detected duration is 1 ms or less. The wider
+    search recovers truncated steep calls, while longer calls keep their
+    previous margins. Unbounded/oracle-seeded tracking retains its 1.0 ms
+    default. The ridge is guided by spectral evidence, not by annotations.
     """
     _profile_start = time.perf_counter() if diagnostics is not None else None
     # Prevent the historically observed ms-vs-s mistake from expanding
@@ -74,7 +75,15 @@ def track_reassigned_ridge(
             )
     n_fft, hop = choose_reassignment_resolution(duration, n_fft, hop)
     if search_margin_ms is None:
-        search_margin_ms = 1.5 if time_bounds_s is not None else 1.0
+        if time_bounds_s is None:
+            search_margin_ms = 1.0
+        else:
+            # Short high-slope FM components can have detector bboxes shorter
+            # than the audible track. Preserve 1.5 ms for >=1.5 ms calls and
+            # grant at most another 0.5 ms to short bounded detections.
+            duration_ms = float(duration) * 1000.0
+            search_margin_ms = 1.5 + 0.5 * float(np.clip(
+                (1.5 - duration_ms) / 0.5, 0.0, 1.0))
     if not np.isfinite(search_margin_ms) or search_margin_ms < 0:
         raise ValueError("search_margin_ms must be finite and nonnegative")
     if sr <= 0:

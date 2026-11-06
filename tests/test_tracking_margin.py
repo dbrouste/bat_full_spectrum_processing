@@ -52,6 +52,20 @@ def test_application_modelling_path_also_uses_new_search_margin():
     assert diag["search_margin_ms"] == 1.5
 
 
+def test_short_bounded_candidate_gets_adaptive_margin_with_explicit_override():
+    y, sr, _, candidate = fm_chirp_with_narrow_detector_bounds()
+    candidate["duration"] = .001
+    diag = {}
+    track_reassigned_candidate(y, sr, candidate, diagnostics=diag)
+    assert diag["search_margin_ms"] == 2.0
+    candidate["duration"] = .00125
+    track_reassigned_candidate(y, sr, candidate, diagnostics=diag)
+    assert diag["search_margin_ms"] == 1.75
+    track_reassigned_candidate(
+        y, sr, candidate, search_margin_ms=1.5, diagnostics=diag)
+    assert diag["search_margin_ms"] == 1.5
+
+
 def test_unbounded_tracking_keeps_previous_margin_and_validates_override():
     sr = 384000
     x = np.sin(2 * np.pi * 70000 * np.arange(3840) / sr)

@@ -60,10 +60,21 @@ def summarize_by_snr(details):
         group = [x for x in details if x.get("snr_max_db") is not None
                  and keep(x["snr_max_db"])]
         n = len(group)
+        tracked = [x for x in group if x.get("tracking_success")
+                   and x.get("mean_full_interval_error_khz") is not None]
+
+        def mean_tracked(key):
+            return (float(np.mean([x[key] for x in tracked])) if tracked else None)
+
         result[label] = {
             "annotated": n,
             "detector_matched": sum(x.get("detector_matched", False) for x in group),
             "tracking_succeeded": sum(x.get("tracking_success", False) for x in group),
+            "mean_tracking_error_khz": mean_tracked("mean_full_interval_error_khz"),
+            "mean_normalized_error": mean_tracked("mean_normalized_error"),
+            "mean_coverage_fraction": mean_tracked("coverage_fraction"),
+            "mean_start_error_ms": mean_tracked("start_error_ms"),
+            "mean_end_error_ms": mean_tracked("end_error_ms"),
             "detector_recall": (sum(x.get("detector_matched", False) for x in group) / n
                                 if n else None),
             # Missing tracks count as 0. This is deliberately different from
@@ -125,7 +136,7 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
              max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
              complete_ends=True, v4_general_min_width_ms=None,
-             low_snr_importance_weight=0.2):
+             low_snr_importance_weight=0.2, search_margin_ms=None):
     if not 0 < low_snr_importance_weight <= 1:
         raise ValueError("low_snr_importance_weight must be in (0, 1]")
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
@@ -186,11 +197,13 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                         peak_freq_khz=float(candidate["peak_freq_hz"]) / 1000)
             diag = {}
             try:
+                tracking_kwargs = ({"search_margin_ms": search_margin_ms}
+                                   if search_margin_ms is not None else {})
                 curve = track_reassigned_candidate(
                     y, int(sr), candidate,
                     n_fft=n_fft, hop=hop, use_broad_seed=use_broad_seed,
                     complete_ends=complete_ends,
-                    diagnostics=diag,
+                    diagnostics=diag, **tracking_kwargs,
                 )
             except Exception as e:
                 curve = None
@@ -296,6 +309,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                 1.33 if v4_general_min_width_ms is None
                 else v4_general_min_width_ms),
             "low_snr_importance_weight": float(low_snr_importance_weight),
+            "search_margin_ms": search_margin_ms,
         },
         "totals": totals, "per_file": per_file, "details": details,
     }
@@ -318,6 +332,9 @@ def main():
     parser.add_argument("--low-snr-weight", type=float, default=0.2,
                         help="Importance for a manually annotated chirp at <=15 dB; "
                              "defaults to 0.2, rising linearly to 1 at >=35 dB")
+    parser.add_argument("--search-margin-ms", type=float, default=None,
+                        help="Override tracking search margin in ms; 1.5 "
+                             "reproduces the previous fixed bounded margin")
     parser.add_argument("--output", default=None,
                         help="Optional output JSON report")
     args = parser.parse_args()
@@ -328,6 +345,7 @@ def main():
         complete_ends=not args.no_completion,
         v4_general_min_width_ms=args.general_min_width_ms,
         low_snr_importance_weight=args.low_snr_weight,
+        search_margin_ms=args.search_margin_ms,
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:
