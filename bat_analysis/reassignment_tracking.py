@@ -31,7 +31,7 @@ def choose_reassignment_resolution(duration_s, n_fft=None, hop=None):
 
 def track_reassigned_ridge(
     y, sr, *, time_mid, duration, seed_freq_hz=None,
-    n_fft=None, hop=None, search_margin_ms=1.0,
+    n_fft=None, hop=None, search_margin_ms=None,
     max_step_hz=None, jump_penalty=0.11, gap_penalty=0.65,
     max_gap_frames=3, snr_min_db=4.0, snr_full_db=16.0,
     subbin_refine=True, anchor_time_radius_ms=0.5,
@@ -48,6 +48,12 @@ def track_reassigned_ridge(
     The optimization uses frequency and velocity as states. The forward-time
     chirp is non-increasing in frequency. No annotations are used at inference.
     Input time_mid and duration are in seconds.
+
+    Detector time bounds often cover only the most energetic part of a full
+    FM sweep. A bounded candidate therefore gets 1.5 ms of search margin per
+    side (rather than the former 1.0 ms). Unbounded/oracle-seeded tracking
+    retains its previous 1.0 ms default. The ridge is still determined only
+    by spectral evidence, not by annotations.
     """
     _profile_start = time.perf_counter() if diagnostics is not None else None
     # Prevent the historically observed ms-vs-s mistake from expanding
@@ -67,6 +73,10 @@ def track_reassigned_ridge(
                 f"duration={duration!r}, bounds={time_bounds_s!r}"
             )
     n_fft, hop = choose_reassignment_resolution(duration, n_fft, hop)
+    if search_margin_ms is None:
+        search_margin_ms = 1.5 if time_bounds_s is not None else 1.0
+    if not np.isfinite(search_margin_ms) or search_margin_ms < 0:
+        raise ValueError("search_margin_ms must be finite and nonnegative")
     if sr <= 0:
         raise ValueError("invalid sample rate")
     if jump_penalty < 0 or gap_penalty < 0:
@@ -346,6 +356,7 @@ def track_reassigned_ridge(
             "refine_endpoints": bool(refine_endpoints),
             "reassignment_n_fft": int(n_fft),
             "reassignment_hop": int(hop),
+            "search_margin_ms": float(search_margin_ms),
             "anchor_time_offset_ms": float((t[anchor_col] - time_mid) * 1000.0),
             "anchor_freq_offset_khz": (
                 float((freqs[anchor_row] - seed_freq_hz) / 1000.0)

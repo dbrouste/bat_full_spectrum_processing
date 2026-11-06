@@ -188,6 +188,14 @@ This is particularly useful when fundamentals, harmonics, or simultaneous calls 
 
 The modelling code also uses an adaptive tracking step bounded between 40 and 60 microseconds. Longer and low-frequency calls can therefore be followed with fewer iterations while short/steep calls keep the finer historical step.
 
+For Flattop reassignment, detector-provided time bounds now receive **1.5 ms
+of tracking search margin on each side** (previously 1.0 ms). The detector's
+bounding box may include only the strongest part of a descending FM call; the
+wider search lets the spectral tracker recover a visible early/late portion.
+Unbounded tracking retains its original 1.0 ms margin. Explicit
+`search_margin_ms` overrides remain supported. No manual annotation is used
+during tracking.
+
 Example using a detector candidate:
 
 ```python
