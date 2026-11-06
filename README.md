@@ -242,6 +242,59 @@ The `benchmark/` package currently contains metrics for two separate questions:
 
 Keeping these stages separate makes it possible to distinguish detector errors from ridge/modelling errors.
 
+### SNR-weighted benchmark (Reassignment-v2)
+
+The end-to-end benchmark uses the same Adaptive V4 detector and Flattop
+reassignment tracker as the application. Manual annotations are **only** used
+for matching/scoring: they are never used to seed the detector or tracker.
+Ground truth requires both `source: "manual"` and `status: "validated"`.
+Automatic proposals, even if accidentally marked validated, and manual drafts
+are excluded. Unmatched manual chirps still appear in the JSON report.
+
+```bash
+python -m benchmark.reassignment_detector_seeds \
+  /path/to/annotations.json /path/to/wav_folder \
+  --output reassignment_v2.json
+```
+
+For each manual chirp, the benchmark calculates an independent SNR profile on
+its PCHIP reference trajectory using a fixed **Flattop 512 / hop 64 STFT** and
+a frequency-specific median noise floor. This reference stays the same when
+the tracker changes. The allowed frequency error is interpolated continuously:
+
+| Local SNR | Frequency tolerance |
+| --- | ---: |
+| 15 dB or lower | 5 kHz |
+| 25 dB | 4 kHz |
+| 35 dB or higher | 3 kHz |
+
+The report includes the maximum/90th-percentile SNR, raw error in kHz,
+mean error divided by the local SNR tolerance, fraction of reference times
+within tolerance, time coverage, and start/end errors. Scores cover the full
+manual interval, including missing endpoints. Detection precision/recall and
+failed tracking remain distinct from the frequency scores. The report also
+groups recall by peak SNR and offers a **full-pipeline within-tolerance score**
+that counts missed manual chirps as zero, so excellent fits on a small subset
+cannot hide poor detector recall. The originating
+Git commit is saved in report metadata.
+
+To compare two runs of this benchmark (for example before and after a
+Reassignment-v2 change), keep the WAV/annotation dataset and settings the same:
+
+```bash
+python -m benchmark.compare_reports baseline.json modified.json \
+  --output comparison.json --html comparison.html
+```
+
+The HTML page interactively plots each shared manual chirp's peak SNR against
+the normalized error before and after. `comparison.json` records improvements,
+regressions, gained/lost matches, and per-chirp deltas. Both input runs must
+contain the SNR-weighted fields to compare those particular scores.
+
+The numeric SNR is an estimate relative to that WAV's STFT noise floor, not an
+absolute calibrated acoustic SNR. Do not compare it against a different SNR
+estimator without recalibration.
+
 ## Ground-truth strategy
 
 Manual annotations are intentionally sparse:

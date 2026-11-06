@@ -15,6 +15,7 @@ import soundfile as sf
 from scipy.interpolate import PchipInterpolator
 
 from bat_analysis.reassignment_tracking import track_reassigned_ridge
+from benchmark.manual_annotations import validated_manual_chirps
 
 
 def evaluate(
@@ -40,7 +41,7 @@ def evaluate(
         y, sr = sf.read(path, always_2d=False)
         if y.ndim == 2:
             y = np.mean(y, axis=1)
-        chirps = record.get("chirps", [])
+        chirps = validated_manual_chirps(record)
         if max_per_file is not None:
             chirps = chirps[:max_per_file]
         for chirp in chirps:

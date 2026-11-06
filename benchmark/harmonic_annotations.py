@@ -17,13 +17,12 @@ from scipy.interpolate import PchipInterpolator
 
 from bat_analysis.reassignment_tracking import track_reassigned_ridge
 from bat_analysis.harmonics import detect_harmonic_segments
+from benchmark.manual_annotations import validated_manual_chirps
 
 
 def _valid_chirps(record):
     out = []
-    for c in record.get("chirps", []):
-        if c.get("status") not in (None, "validated"):
-            continue
+    for c in validated_manual_chirps(record):
         pts = sorted(c.get("points", []), key=lambda p: p["t_ms"])
         if len(pts) < 2:
             continue

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -20,13 +21,40 @@ from scipy.optimize import linear_sum_assignment
 from bat_analysis.detection import detect_candidates_snr_blobs
 from bat_analysis.reassignment_tracking import track_reassigned_candidate
 from bat_analysis.harmonics import detect_harmonic_segments
+from benchmark.manual_annotations import validated_manual_chirps
+from benchmark.snr_metrics import ReferenceSNR, compare_trajectory
+
+
+def summarize_by_snr(details):
+    """Report detection and full-pipeline tolerance by reference peak SNR."""
+    bounds = (
+        ("low_15_db_or_less", lambda snr: snr <= 15.0),
+        ("medium_15_to_35_db", lambda snr: 15.0 < snr < 35.0),
+        ("high_35_db_or_more", lambda snr: snr >= 35.0),
+    )
+    result = {}
+    for label, keep in bounds:
+        group = [x for x in details if x.get("snr_max_db") is not None
+                 and keep(x["snr_max_db"])]
+        n = len(group)
+        result[label] = {
+            "annotated": n,
+            "detector_matched": sum(x.get("detector_matched", False) for x in group),
+            "tracking_succeeded": sum(x.get("tracking_success", False) for x in group),
+            "detector_recall": (sum(x.get("detector_matched", False) for x in group) / n
+                                if n else None),
+            # Missing tracks count as 0. This is deliberately different from
+            # the within-tolerance fraction on successfully tracked curves.
+            "full_pipeline_within_tolerance_fraction": (
+                float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
+                               for x in group])) if n else None),
+        }
+    return result
 
 
 def _manual_annotations(record):
     valid = []
-    for chirp in record.get("chirps", []):
-        if chirp.get("status") not in (None, "validated"):
-            continue
+    for chirp in validated_manual_chirps(record):
         points = sorted(chirp.get("points", []), key=lambda p: p["t_ms"])
         if len(points) < 2:
             continue
@@ -88,6 +116,16 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         manual = _manual_annotations(record)
         if max_per_file is not None:
             manual = manual[:max_per_file]
+        # Fixed STFT reference: the SNR never depends on a predicted trajectory.
+        snr_reference = (ReferenceSNR.from_audio(y, int(sr)) if manual else None)
+        file_details = []
+        for chirp_id, t, _, reference in manual:
+            item = dict(file=wav_name, chirp_id=chirp_id,
+                        detector_matched=False, tracking_success=False)
+            item.update(compare_trajectory(
+                reference, t[0], t[-1], None, snr_reference))
+            file_details.append(item)
+        details.extend(file_details)
         # Run the exact library detector, not a locally reimplemented proxy.
         candidates = detect_candidates_snr_blobs(
             np.asarray(y), int(sr), slope_filter_mode="adaptive_v4"
@@ -96,12 +134,24 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         summary = dict(file=wav_name, annotated=len(manual),
                        candidates=len(candidates), matched=len(matches),
                        unmatched_annotations=len(manual) - len(matches),
-                       unmatched_candidates=len(candidates) - len(matches))
+                       # With only a subset of manual chirps, other candidates
+                       # cannot fairly be counted as unmatched proposals.
+                       unmatched_candidates=(len(candidates) - len(matches)
+                                             if max_per_file is None else None),
+                       ignored_automatic_proposals=sum(
+                           chirp.get("source") == "automatic"
+                           for chirp in record.get("chirps", [])))
         errors = []
         covers = []
+        normalized_errors = []
+        tolerance_fractions = []
         for candidate_index, manual_index in matches:
             candidate = candidates[candidate_index]
             chirp_id, t, _, reference = manual[manual_index]
+            item = file_details[manual_index]
+            item.update(detector_matched=True, candidate_index=candidate_index,
+                        peak_time_ms=1000 * float(candidate["time_mid"]),
+                        peak_freq_khz=float(candidate["peak_freq_hz"]) / 1000)
             diag = {}
             try:
                 curve = track_reassigned_candidate(
@@ -113,27 +163,15 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             except Exception as e:
                 curve = None
                 diag["error"] = f"{type(e).__name__}: {e}"
-            item = dict(file=wav_name, chirp_id=chirp_id,
-                        candidate_index=candidate_index,
-                        peak_time_ms=1000 * float(candidate["time_mid"]),
-                        peak_freq_khz=float(candidate["peak_freq_hz"]) / 1000,
-                        tracking_success=curve is not None)
+            item["tracking_success"] = curve is not None
             if curve is not None:
-                # Uniform temporal grid penalizes missing endpoints instead of
-                # measuring error only where tracking chose to return points.
-                grid = np.linspace(t[0], t[-1], 50)
-                diff = np.abs(np.interp(grid, curve[:, 0], curve[:, 1])
-                              - reference(grid)) / 1000
-                coverage = max(
-                    0., min(curve[-1, 0], t[-1])
-                    - max(curve[0, 0], t[0])
-                ) / (t[-1] - t[0])
-                item.update(mean_full_interval_error_khz=float(diff.mean()),
-                            p90_error_khz=float(np.percentile(diff, 90)),
-                            coverage_fraction=float(coverage),
-                            points=int(len(curve)))
+                item.update(compare_trajectory(
+                    reference, t[0], t[-1], curve, snr_reference))
+                item["points"] = int(len(curve))
                 errors.append(item["mean_full_interval_error_khz"])
-                covers.append(float(coverage))
+                covers.append(item["coverage_fraction"])
+                normalized_errors.append(item["mean_normalized_error"])
+                tolerance_fractions.append(item["within_snr_tolerance_fraction"])
                 if evaluate_harmonics:
                     harmonic_segments = detect_harmonic_segments(
                         y, int(sr), curve, parent_id=candidate_index)
@@ -147,18 +185,27 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                         for h in harmonic_segments
                     ]
             item["diagnostics"] = diag
-            details.append(item)
         summary.update(
             tracking_succeeded=len(errors),
             detector_match_recall=(len(matches) / len(manual) if manual else None),
             detector_match_precision=(len(matches) / len(candidates)
-                                      if candidates else None),
+                                      if candidates and max_per_file is None else None),
             mean_tracking_error_khz=(float(np.mean(errors)) if errors else None),
             mean_tracking_coverage=(float(np.mean(covers)) if covers else None),
+            mean_normalized_error=(float(np.mean(normalized_errors))
+                                   if normalized_errors else None),
+            mean_within_snr_tolerance_fraction=(float(np.mean(tolerance_fractions))
+                                                if tolerance_fractions else None),
+            full_pipeline_within_tolerance_fraction=(
+                float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
+                               for x in file_details])) if file_details else None),
+            by_snr=summarize_by_snr(file_details),
         )
         per_file.append(summary)
     totals = dict(
         files=len(per_file),
+        files_evaluated=sum("error" not in x for x in per_file),
+        files_missing=sum("error" in x for x in per_file),
         annotated=sum(x.get("annotated", 0) for x in per_file),
         candidates=sum(x.get("candidates", 0) for x in per_file),
         matched=sum(x.get("matched", 0) for x in per_file),
@@ -169,7 +216,47 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
     totals["mean_tracking_error_khz"] = (
         float(np.mean(all_err)) if all_err else None
     )
-    return {"totals": totals, "per_file": per_file, "details": details}
+    all_normalized = [x["mean_normalized_error"] for x in details
+                      if x.get("mean_normalized_error") is not None]
+    all_tolerance = [x["within_snr_tolerance_fraction"] for x in details
+                     if x.get("within_snr_tolerance_fraction") is not None]
+    totals["mean_normalized_error"] = (
+        float(np.mean(all_normalized)) if all_normalized else None)
+    totals["mean_within_snr_tolerance_fraction"] = (
+        float(np.mean(all_tolerance)) if all_tolerance else None)
+    totals["full_pipeline_within_tolerance_fraction"] = (
+        float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
+                       for x in details])) if details else None)
+    totals["by_snr"] = summarize_by_snr(details)
+    totals["ignored_automatic_proposals"] = sum(
+        x.get("ignored_automatic_proposals", 0) for x in per_file)
+    totals["snr_tolerance_khz"] = {"at_or_below_15_db": 5.0,
+                                    "at_or_above_35_db": 3.0}
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root,
+            stderr=subprocess.DEVNULL, text=True).strip()
+        git_dirty = bool(subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=repo_root,
+            stderr=subprocess.DEVNULL, text=True).strip())
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+        git_dirty = None
+    return {
+        "metadata": {
+            "method": "adaptive_v4 -> reassignment_flattop",
+            "git_commit": commit,
+            "git_dirty": git_dirty,
+            "snr_reference": "STFT flattop 512, hop 64; median dB noise per frequency",
+            "ground_truth": "manual + validated only",
+            "annotations": str(annotation_file),
+            "n_fft": n_fft,
+            "hop": hop,
+            "max_per_file": max_per_file,
+        },
+        "totals": totals, "per_file": per_file, "details": details,
+    }
 
 
 def main():
