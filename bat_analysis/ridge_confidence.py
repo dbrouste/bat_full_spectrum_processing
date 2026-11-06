@@ -8,6 +8,65 @@ from __future__ import annotations
 import numpy as np
 
 
+def trim_rebound_echo_tail(
+    curve, *, jump_threshold_hz=4500.0, sustained_rebound_hz=4000.0,
+    min_prior_drop_hz=15000.0, late_start_fraction=0.55,
+    lookahead_points=5, min_keep_points=8, min_remaining_points=5,
+    return_diagnostics=False,
+):
+    """Stop a descending FM track when it turns upward onto a delayed echo.
+
+    Sub-bin refinement can pull an otherwise monotone dynamic-programming path
+    onto a later echo. Its amplitude may be strong enough to pass an SNR-only
+    tail gate. Require a substantial *sustained* rebound after an established
+    FM descent and leave small/local frequency jitter untouched. This only
+    truncates existing observations; it does not invent or reshape a ridge.
+    """
+    x = np.asarray(curve, dtype=float)
+    if (x.ndim != 2 or x.shape[1] != 3 or not np.isfinite(x).all()
+            or (len(x) > 1 and not np.all(np.diff(x[:, 0]) > 0))):
+        raise ValueError("curve must be finite, time-sorted Nx3")
+    if (jump_threshold_hz <= 0 or sustained_rebound_hz <= 0
+            or min_prior_drop_hz <= 0 or not 0 < late_start_fraction < 1
+            or lookahead_points < 2 or min_keep_points < 2
+            or min_remaining_points < lookahead_points):
+        raise ValueError("invalid echo rebound thresholds")
+    diag = {
+        "trimmed_right_points": 0, "trim_reason": None,
+        "rebound_time_s": None, "rebound_khz": None,
+        "sustained_rebound_khz": None,
+    }
+    n = len(x)
+    if n < min_keep_points + min_remaining_points:
+        return (x.copy(), diag) if return_diagnostics else x.copy()
+
+    frequency = x[:, 1]
+    for j in np.flatnonzero(np.diff(frequency) > jump_threshold_hz):
+        # The first main descent must already be well established. The echo
+        # must also have enough following samples to distinguish a new ridge
+        # from a one-frame centroid fluctuation.
+        if (j + 1 < min_keep_points or j / n < late_start_fraction
+                or n - j - 1 < min_remaining_points
+                or np.max(frequency[:j + 1]) - frequency[j] < min_prior_drop_hz):
+            continue
+        sustained = float(
+            np.median(frequency[j + 1:j + 1 + lookahead_points])
+            - frequency[j]
+        )
+        if sustained < sustained_rebound_hz:
+            continue
+        diag.update({
+            "trimmed_right_points": int(n - j - 1),
+            "trim_reason": "echo_rebound",
+            "rebound_time_s": float(x[j + 1, 0]),
+            "rebound_khz": float((frequency[j + 1] - frequency[j]) / 1000),
+            "sustained_rebound_khz": sustained / 1000,
+        })
+        result = x[:j + 1].copy()
+        return (result, diag) if return_diagnostics else result
+    return (x.copy(), diag) if return_diagnostics else x.copy()
+
+
 def trim_weak_right_tail(
     curve, *, times_s, freqs_hz, stft_power, snr_db,
     min_snr_db=10.0, min_relative_db=-22.0,

@@ -136,7 +136,8 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
              max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
              complete_ends=True, v4_general_min_width_ms=None,
-             low_snr_importance_weight=0.2, search_margin_ms=None):
+             low_snr_importance_weight=0.2, search_margin_ms=None,
+             trim_echo_rebound=True):
     if not 0 < low_snr_importance_weight <= 1:
         raise ValueError("low_snr_importance_weight must be in (0, 1]")
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
@@ -203,6 +204,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                     y, int(sr), candidate,
                     n_fft=n_fft, hop=hop, use_broad_seed=use_broad_seed,
                     complete_ends=complete_ends,
+                    trim_echo_rebound=trim_echo_rebound,
                     diagnostics=diag, **tracking_kwargs,
                 )
             except Exception as e:
@@ -310,6 +312,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
                 else v4_general_min_width_ms),
             "low_snr_importance_weight": float(low_snr_importance_weight),
             "search_margin_ms": search_margin_ms,
+            "trim_echo_rebound": bool(trim_echo_rebound),
         },
         "totals": totals, "per_file": per_file, "details": details,
     }
@@ -335,6 +338,9 @@ def main():
     parser.add_argument("--search-margin-ms", type=float, default=None,
                         help="Override tracking search margin in ms; 1.5 "
                              "reproduces the previous fixed bounded margin")
+    parser.add_argument("--no-echo-trim", action="store_true",
+                        help="Disable the late FM rebound/echo stopping rule "
+                             "to benchmark the previous tracking behavior")
     parser.add_argument("--output", default=None,
                         help="Optional output JSON report")
     args = parser.parse_args()
@@ -346,6 +352,7 @@ def main():
         v4_general_min_width_ms=args.general_min_width_ms,
         low_snr_importance_weight=args.low_snr_weight,
         search_margin_ms=args.search_margin_ms,
+        trim_echo_rebound=not args.no_echo_trim,
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:

@@ -41,7 +41,7 @@ def track_reassigned_ridge(
     endpoint_tail_fraction=0.35, complete_ends=True,
     extension_min_snr_db=17.0, peak_anchored_window=False,
     trim_weak_tail=True, tail_min_snr_db=10.0,
-    tail_min_relative_db=-22.0, diagnostics=None,
+    tail_min_relative_db=-22.0, trim_echo_rebound=True, diagnostics=None,
 ):
     """Return absolute-time ridge [time_s, freq_hz, normalized amplitude].
 
@@ -338,6 +338,12 @@ def track_reassigned_ridge(
             times_s=t, freqs_hz=freqs, stft_power=regular,
             return_diagnostics=True,
         )
+    echo_diag = None
+    if trim_echo_rebound:
+        from .ridge_confidence import trim_rebound_echo_tail
+        curve, echo_diag = trim_rebound_echo_tail(
+            curve, return_diagnostics=True,
+        )
     if diagnostics is not None:
         _profile_end = time.perf_counter()
         diagnostics["timings_ms"] = {
@@ -359,7 +365,9 @@ def track_reassigned_ridge(
             "endpoint_refinement": endpoint_diag,
             "ridge_completion": completion_diag,
             "tail_confidence": tail_diag,
+            "echo_tail_confidence": echo_diag,
             "trim_weak_tail": bool(trim_weak_tail),
+            "trim_echo_rebound": bool(trim_echo_rebound),
             "complete_ends": bool(complete_ends),
             "peak_anchored_window": bool(peak_anchored_window),
             "refine_endpoints": bool(refine_endpoints),

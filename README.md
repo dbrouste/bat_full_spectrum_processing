@@ -196,6 +196,13 @@ an earlier portion of a steep chirp. Unbounded tracking retains its original
 1.0 ms margin. Explicit `search_margin_ms` overrides remain supported. No
 manual annotation is used during tracking.
 
+After tracking and frequency refinement, a conservative right-tail check
+stops a descending FM ridge when it **rebounds sharply and persistently**
+onto an echo. It requires an established frequency drop and at least five
+following observations, so small endpoint fluctuations are preserved. The
+option `trim_echo_rebound=False` disables this check for comparisons; the
+benchmark accepts `--no-echo-trim` to reproduce the previous behavior.
+
 Example using a detector candidate:
 
 ```python

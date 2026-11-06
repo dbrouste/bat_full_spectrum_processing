@@ -2,7 +2,9 @@
 import numpy as np
 import pytest
 
-from bat_analysis.ridge_confidence import trim_weak_right_tail
+from bat_analysis.ridge_confidence import (
+    trim_weak_right_tail, trim_rebound_echo_tail,
+)
 
 
 def sample_track(weak_tail=0, *, all_strong=False):
@@ -124,3 +126,42 @@ def test_invalid_matrices_and_thresholds():
         trim_weak_right_tail(
             curve, times_s=t, freqs_hz=f,
             stft_power=power, snr_db=snr, late_gap_min_fraction=0)
+
+
+def test_trims_sustained_echo_rebound_after_steep_fm_descent():
+    t = 3.681 + np.arange(49) * .0000625
+    frequency = np.r_[np.linspace(108000, 50500, 34),
+                      [56500, 54800, 57000, 55800, 56800],
+                      np.linspace(57000, 53000, 10)]
+    curve = np.column_stack([t, frequency, np.ones(len(t))])
+    original = curve.copy()
+    result, diagnostics = trim_rebound_echo_tail(
+        curve, return_diagnostics=True,
+    )
+    np.testing.assert_array_equal(result, original[:34])
+    np.testing.assert_array_equal(curve, original)
+    assert diagnostics["trimmed_right_points"] == 15
+    assert diagnostics["trim_reason"] == "echo_rebound"
+    assert diagnostics["rebound_khz"] == pytest.approx(6.0)
+
+
+@pytest.mark.parametrize("change", ["small", "isolated", "early", "no_drop"])
+def test_preserves_normal_jitter_and_unestablished_rebounds(change):
+    t = .005 + np.arange(50) * .0000625
+    frequency = np.linspace(100000, 50000, 50)
+    if change == "small":
+        frequency[36:] += 3000
+    elif change == "isolated":
+        frequency[36] += 7000
+    elif change == "early":
+        frequency[8:13] += 7000
+    else:
+        frequency = np.linspace(70000, 60000, 50)
+        frequency[36:] += 7000
+    curve = np.column_stack([t, frequency, np.ones(len(t))])
+    result, diagnostics = trim_rebound_echo_tail(
+        curve, return_diagnostics=True,
+    )
+    np.testing.assert_array_equal(result, curve)
+    assert diagnostics["trimmed_right_points"] == 0
+    assert diagnostics["trim_reason"] is None
