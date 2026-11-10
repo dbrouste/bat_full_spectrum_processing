@@ -1,5 +1,8 @@
 numpy
 scipy
 soundfile
+librosa
+shapely
+pandas
 plotly
 dash>=2.11

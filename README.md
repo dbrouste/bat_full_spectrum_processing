@@ -67,6 +67,15 @@ de chaque nouvelle session, et affiche les identifiants des commits utilisés.
 
 ## Installation
 
+### Laboratoire de benchmark local (Windows)
+
+Le premier socle multiprocessus (indexation WAV/JSON, cache par WAV, historique
+SQLite et rapport HTML hors ligne) est décrit dans
+[`docs/LABORATOIRE_AUTONOME_WINDOWS.md`](docs/LABORATOIRE_AUTONOME_WINDOWS.md).
+Il réutilise le benchmark SNR existant ; l'optimisation Optuna, l'agent IA et
+le score géométrique spécifié sont prévus pour les phases suivantes.
+
+
 Clone the repository and install the main dependencies:
 
 ```bash

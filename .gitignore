@@ -7,4 +7,5 @@ env/
 *.egg-info/
 .DS_Store
 bat_chirp_annotations.json
+laboratory-results/
 *.tmp

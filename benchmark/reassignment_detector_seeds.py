@@ -133,6 +133,45 @@ def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
     return [(int(i), int(j)) for i, j in zip(rows, cols) if cost[i, j] < 1e6]
 
 
+def summarize_results(per_file, details, *, low_snr_importance_weight=0.2):
+    """Aggregate independent WAV results, including missed manual chirps.
+
+    Shared by the sequential benchmark and the Windows laboratory's parallel
+    runner. Never average per-WAV means: WAVs contain different chirp counts.
+    """
+    totals = dict(
+        files=len(per_file),
+        files_evaluated=sum("error" not in x for x in per_file),
+        files_missing=sum("error" in x for x in per_file),
+        annotated=sum(x.get("annotated", 0) for x in per_file),
+        candidates=sum(x.get("candidates", 0) for x in per_file),
+        matched=sum(x.get("matched", 0) for x in per_file),
+        tracked=sum(x.get("tracking_succeeded", 0) for x in per_file),
+    )
+    for key, source in (
+        ("mean_tracking_error_khz", "mean_full_interval_error_khz"),
+        ("mean_normalized_error", "mean_normalized_error"),
+        ("mean_within_snr_tolerance_fraction", "within_snr_tolerance_fraction"),
+    ):
+        values = [x[source] for x in details if x.get(source) is not None]
+        totals[key] = float(np.mean(values)) if values else None
+    totals["full_pipeline_within_tolerance_fraction"] = (
+        float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
+                       for x in details])) if details else None
+    )
+    totals["by_snr"] = summarize_by_snr(details)
+    totals.update(summarize_importance(details))
+    totals["ignored_automatic_proposals"] = sum(
+        x.get("ignored_automatic_proposals", 0) for x in per_file)
+    totals["snr_tolerance_khz"] = {"at_or_below_15_db": 5.0,
+                                    "at_or_above_35_db": 3.0}
+    totals["detection_importance"] = {
+        "at_or_below_15_db": float(low_snr_importance_weight),
+        "at_or_above_35_db": 1.0,
+    }
+    return totals
+
+
 def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
              max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
              complete_ends=True, v4_general_min_width_ms=None,
@@ -250,41 +289,8 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             **summarize_importance(file_details),
         )
         per_file.append(summary)
-    totals = dict(
-        files=len(per_file),
-        files_evaluated=sum("error" not in x for x in per_file),
-        files_missing=sum("error" in x for x in per_file),
-        annotated=sum(x.get("annotated", 0) for x in per_file),
-        candidates=sum(x.get("candidates", 0) for x in per_file),
-        matched=sum(x.get("matched", 0) for x in per_file),
-        tracked=sum(x.get("tracking_succeeded", 0) for x in per_file),
-    )
-    all_err = [x["mean_full_interval_error_khz"] for x in details
-               if x.get("mean_full_interval_error_khz") is not None]
-    totals["mean_tracking_error_khz"] = (
-        float(np.mean(all_err)) if all_err else None
-    )
-    all_normalized = [x["mean_normalized_error"] for x in details
-                      if x.get("mean_normalized_error") is not None]
-    all_tolerance = [x["within_snr_tolerance_fraction"] for x in details
-                     if x.get("within_snr_tolerance_fraction") is not None]
-    totals["mean_normalized_error"] = (
-        float(np.mean(all_normalized)) if all_normalized else None)
-    totals["mean_within_snr_tolerance_fraction"] = (
-        float(np.mean(all_tolerance)) if all_tolerance else None)
-    totals["full_pipeline_within_tolerance_fraction"] = (
-        float(np.mean([x.get("within_snr_tolerance_fraction", 0.0)
-                       for x in details])) if details else None)
-    totals["by_snr"] = summarize_by_snr(details)
-    totals.update(summarize_importance(details))
-    totals["ignored_automatic_proposals"] = sum(
-        x.get("ignored_automatic_proposals", 0) for x in per_file)
-    totals["snr_tolerance_khz"] = {"at_or_below_15_db": 5.0,
-                                    "at_or_above_35_db": 3.0}
-    totals["detection_importance"] = {
-        "at_or_below_15_db": float(low_snr_importance_weight),
-        "at_or_above_35_db": 1.0,
-    }
+    totals = summarize_results(
+        per_file, details, low_snr_importance_weight=low_snr_importance_weight)
     repo_root = Path(__file__).resolve().parents[1]
     try:
         commit = subprocess.check_output(
