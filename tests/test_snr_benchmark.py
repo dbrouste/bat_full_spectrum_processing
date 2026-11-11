@@ -84,6 +84,21 @@ class _ConstantSNR:
         return np.full(len(times_s), self.value)
 
 
+
+def test_candidate_matching_uses_shared_square_distance_for_steep_chirp():
+    pytest.importorskip("chirp_geometry")
+    t = np.array([0.020, 0.024])
+    f = np.array([120_000., 40_000.])
+    manual = [(1, t, f, lambda x: np.interp(x, t, f))]
+    candidate = [{"time_mid": 0.021, "peak_freq_hz": 103_000.}]
+    assert detector_benchmark.match_candidates(
+        candidate, manual, max_seed_error_khz=2.5,
+        geometry_mode="vertical_legacy") == []
+    assert detector_benchmark.match_candidates(
+        candidate, manual, max_seed_error_khz=2.5,
+        geometry_mode="square_normals_v1") == [(0, 0)]
+
+
 def test_same_frequency_error_is_stricter_for_strong_chirp():
     reference = lambda t: np.full_like(t, 70_000)
     predicted = np.array([[0.0, 74_000], [0.01, 74_000]])

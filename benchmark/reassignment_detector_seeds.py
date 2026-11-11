@@ -104,31 +104,41 @@ def _manual_annotations(record):
 
 
 def match_candidates(candidates, annotations, *, time_slack_ms=1.5,
-                     max_seed_error_khz=18.0):
+                     max_seed_error_khz=18.0,
+                     geometry_mode="vertical_legacy"):
     """One-to-one matching for evaluating detector candidates.
 
-    A match requires peak time near the annotated span and peak frequency
-    within a tolerance of the manually interpolated ridge. Matching uses
-    annotations ONLY for scoring and never feeds them into tracking.
+    A match requires peak time near the annotated span and a bounded
+    distance to the manual curve. The square mode measures the shortest
+    Euclidean distance in calibrated kHz_eq; the legacy mode uses a
+    vertical frequency difference. Matching never seeds the tracker.
     """
+    if geometry_mode not in ("vertical_legacy", "square_normals_v1"):
+        raise ValueError("unknown geometry_mode")
+    if geometry_mode == "square_normals_v1":
+        from chirp_geometry import point_distance_to_manual_curve
     if not candidates or not annotations:
         return []
     cost = np.full((len(candidates), len(annotations)), 1e6)
     for i, c in enumerate(candidates):
         peak_t = float(c["time_mid"])
         peak_f = float(c["peak_freq_hz"])
-        for j, (_, t, _, curve) in enumerate(annotations):
+        for j, (_, t, f, curve) in enumerate(annotations):
             duration = t[-1] - t[0]
             if not t[0] - time_slack_ms / 1000 <= peak_t <= t[-1] + time_slack_ms / 1000:
                 continue
             time_error_ms = abs(peak_t - 0.5 * (t[0] + t[-1])) * 1000
             if time_error_ms > max(3.0, 1.5 * duration * 1000):
                 continue
-            clipped_t = np.clip(peak_t, t[0], t[-1])
-            freq_error_khz = abs(peak_f - float(curve(clipped_t))) / 1000
-            if freq_error_khz > max_seed_error_khz:
+            if geometry_mode == "square_normals_v1":
+                geometric_distance = point_distance_to_manual_curve(
+                    t * 1000, f / 1000, peak_t * 1000, peak_f / 1000)
+            else:
+                clipped_t = np.clip(peak_t, t[0], t[-1])
+                geometric_distance = abs(peak_f - float(curve(clipped_t))) / 1000
+            if geometric_distance > max_seed_error_khz:
                 continue
-            cost[i, j] = time_error_ms / 3.0 + freq_error_khz / max_seed_error_khz
+            cost[i, j] = time_error_ms / 3.0 + geometric_distance / max_seed_error_khz
     rows, cols = linear_sum_assignment(cost)
     return [(int(i), int(j)) for i, j in zip(rows, cols) if cost[i, j] < 1e6]
 
@@ -183,7 +193,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             np.asarray(y), int(sr), slope_filter_mode="adaptive_v4",
             **detector_kwargs,
         )
-        matches = match_candidates(candidates, manual)
+        matches = match_candidates(candidates, manual, geometry_mode=geometry_mode)
         summary = dict(file=wav_name, annotated=len(manual),
                        candidates=len(candidates), matched=len(matches),
                        unmatched_annotations=len(manual) - len(matches),
