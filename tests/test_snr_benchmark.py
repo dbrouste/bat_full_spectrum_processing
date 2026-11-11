@@ -204,6 +204,14 @@ def test_end_to_end_benchmark_counts_only_manual_and_scores_unmatched(tmp_path, 
     assert "mean_normalized_error" not in report["details"][1]
 
 
+
+def test_compare_reports_rejects_mixed_vertical_and_square_protocols():
+    before = {"metadata": {"scoring_protocol": "vertical_legacy"}, "details": []}
+    after = {"metadata": {"scoring_protocol": "square_normals_v1"}, "details": []}
+    with pytest.raises(ValueError, match="incompatible scoring protocols"):
+        compare_reports(before, after)
+
+
 def test_compare_reports_aligns_manual_chirps_and_reports_regressions():
     before = {"details": [
         {"file": "a.wav", "chirp_id": 7, "detector_matched": True,

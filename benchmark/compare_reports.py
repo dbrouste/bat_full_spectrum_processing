@@ -21,6 +21,8 @@ METRICS = (
     "mean_full_interval_error_khz",
     "coverage_fraction",
     "within_snr_tolerance_fraction",
+    "mean_geometric_error_khz_eq",
+    "geometric_coverage_fraction",
 )
 
 
@@ -30,7 +32,13 @@ def _index(report):
 
 
 def compare_reports(before, after, *, significant_delta=0.05):
-    """Align by WAV and manual chirp ID; negative normalized delta improves."""
+    """Align by WAV and manual chirp ID, with compatible scoring protocols."""
+    first_protocol = before.get("metadata", {}).get("scoring_protocol", "vertical_legacy")
+    second_protocol = after.get("metadata", {}).get("scoring_protocol", "vertical_legacy")
+    if first_protocol != second_protocol:
+        raise ValueError(
+            f"incompatible scoring protocols: {first_protocol} vs {second_protocol}; "
+            "never compare vertical kHz with geometric kHz_eq scores")
     first, second = _index(before), _index(after)
     rows = []
     for wav, chirp_id in sorted(first.keys() & second.keys()):
@@ -72,6 +80,7 @@ def compare_reports(before, after, *, significant_delta=0.05):
     return {
         "before": before.get("metadata", {}),
         "after": after.get("metadata", {}),
+        "scoring_protocol": first_protocol,
         "before_totals": before.get("totals", {}),
         "after_totals": after.get("totals", {}),
         "summary": summary,
@@ -100,7 +109,7 @@ def write_html_comparison(report, output):
     fig.update_layout(
         title="Comparaison des trajectoires · annotations manuelles uniquement",
         xaxis_title="SNR max estimé (dB)",
-        yaxis_title="Erreur fréquentielle / tolérance SNR (plus bas = mieux)",
+        yaxis_title="Erreur / tolérance SNR selon le protocole (plus bas = mieux)",
         hovermode="closest",
     )
     fig.write_html(str(output), include_plotlyjs=True)
