@@ -81,15 +81,33 @@ class ReferenceSNR:
 
 
 def compare_trajectory(reference, t_start_s, t_end_s, predicted_curve,
-                       reference_snr: ReferenceSNR, *, grid_points=50):
-    """Score full annotated duration, including a prediction's missing ends.
+                       reference_snr: ReferenceSNR, *, grid_points=50,
+                       geometry_mode="vertical_legacy", manual_points=None):
+    """Score a prediction using explicit vertical or square-normal geometry.
 
-    Frequency units: reference and predicted_curve are in Hz, times in s.
-    Extrapolated missing ends contribute an error; time coverage is reported
-    separately so a short, accurate fragment cannot hide its incompleteness.
+    Input times are seconds and frequencies Hz. "vertical_legacy" preserves
+    historical frequency errors. "square_normals_v1" uses the external
+    canonical chirp_geometry package and requires manual_points (s, Hz).
+    The vertical errors remain separate diagnostics even in square mode.
+    Uncovered normals count as failures; extrapolated vertical errors
+    remain available for historical comparisons.
     """
     if grid_points < 2 or t_end_s <= t_start_s:
         raise ValueError("invalid benchmark time grid")
+    if geometry_mode not in ("vertical_legacy", "square_normals_v1"):
+        raise ValueError("unknown geometry_mode")
+    if geometry_mode == "square_normals_v1":
+        if manual_points is None:
+            raise ValueError("square_normals_v1 requires manual_points in (s, Hz)")
+        try:
+            from chirp_geometry import PROTOCOL, compare_normal_curves
+        except ImportError as exc:
+            raise ImportError(
+                "square_normals_v1 requires chirp_geometry; install the sibling "
+                "Bat-Chirp-Laboratory via 'pip install -e ../Bat-Chirp-Laboratory'"
+            ) from exc
+        if PROTOCOL != geometry_mode:
+            raise ValueError("incompatible chirp_geometry protocol")
     grid = np.linspace(t_start_s, t_end_s, grid_points)
     truth = np.asarray(reference(grid), dtype=float)
     local_snr = reference_snr.along_reference(grid, truth)
@@ -100,6 +118,9 @@ def compare_trajectory(reference, t_start_s, t_end_s, predicted_curve,
         "snr_median_db": float(np.median(local_snr)),
         "tolerance_min_khz": float(np.min(tolerance)),
         "tolerance_max_khz": float(np.max(tolerance)),
+        "scoring_protocol": geometry_mode,
+        "tolerance_units": ("kHz_eq" if geometry_mode == "square_normals_v1"
+                            else "kHz_vertical"),
     }
     if predicted_curve is None:
         return result
@@ -113,16 +134,52 @@ def compare_trajectory(reference, t_start_s, t_end_s, predicted_curve,
         raise ValueError("predicted curve needs distinct times")
     freq = curve[unique_idx, 1]
     error = np.abs(np.interp(grid, time, freq) - truth) / 1000.0
-    normalized = error / tolerance
+    vertical_normalized = error / tolerance
     overlap = max(0., min(time[-1], t_end_s) - max(time[0], t_start_s))
     result.update({
+        # Historical vertical-frequency diagnostics, never relabel as geometry.
         "mean_full_interval_error_khz": float(np.mean(error)),
         "p90_error_khz": float(np.percentile(error, 90)),
-        "mean_normalized_error": float(np.mean(normalized)),
-        "p90_normalized_error": float(np.percentile(normalized, 90)),
-        "within_snr_tolerance_fraction": float(np.mean(normalized <= 1.0)),
+        "vertical_mean_normalized_error": float(np.mean(vertical_normalized)),
+        "vertical_within_snr_tolerance_fraction": float(np.mean(vertical_normalized <= 1.0)),
         "coverage_fraction": float(overlap / (t_end_s - t_start_s)),
         "start_error_ms": float(abs(time[0] - t_start_s) * 1000),
         "end_error_ms": float(abs(time[-1] - t_end_s) * 1000),
+    })
+    if geometry_mode == "vertical_legacy":
+        result.update({
+            "mean_normalized_error": float(np.mean(vertical_normalized)),
+            "p90_normalized_error": float(np.percentile(vertical_normalized, 90)),
+            "within_snr_tolerance_fraction": float(np.mean(vertical_normalized <= 1.0)),
+        })
+        return result
+
+    manual = np.asarray(manual_points, dtype=float)
+    if (manual.ndim != 2 or manual.shape[1] != 2 or len(manual) < 2
+            or not np.isfinite(manual).all()
+            or np.any(np.diff(manual[:, 0]) <= 0)):
+        raise ValueError("manual_points must be ordered finite (s, Hz) rows")
+    geometry = compare_normal_curves(
+        manual[:, 0] * 1000, manual[:, 1] / 1000,
+        time * 1000, freq / 1000, grid * 1000)
+    covered = geometry["covered"]
+    distances = geometry["abs_normal_khz_eq"]
+    normalized = np.full(len(grid), 2.0)
+    normalized[covered] = distances[covered] / tolerance[covered]
+    # Uncovered normals contribute zero to the within-tolerance fraction.
+    within = float(np.mean(covered & (normalized <= 1.0)))
+    result.update({
+        "mean_geometric_error_khz_eq": (float(np.mean(distances[covered]))
+                                        if np.any(covered) else None),
+        "p90_geometric_error_khz_eq": (float(np.percentile(distances[covered], 90))
+                                       if np.any(covered) else None),
+        "geometric_coverage_fraction": geometry["coverage_fraction"],
+        "normalization_mode": geometry["normalization_mode"],
+        "time_scale_khz_per_ms": geometry["time_scale_khz_per_ms"],
+        "geometric_uncovered_penalty_multiple": 2.0,
+        "mean_normalized_error": float(np.mean(normalized)),
+        "p90_normalized_error": float(np.percentile(normalized, 90)),
+        "within_snr_tolerance_fraction": within,
+        "within_geometric_tolerance_fraction": within,
     })
     return result

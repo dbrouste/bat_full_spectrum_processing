@@ -12,6 +12,10 @@ class CurveMetrics:
     p95_abs_error_khz: float
     rmse_khz: float
     coverage: float
+    median_abs_error_khz_eq: float | None = None
+    p95_abs_error_khz_eq: float | None = None
+    geometric_coverage_fraction: float | None = None
+    geometry_protocol: str = "vertical_legacy"
 
 
 def compare_curves(
@@ -19,6 +23,7 @@ def compare_curves(
     reference_f_khz: Sequence[float],
     predicted_t_ms: Sequence[float],
     predicted_f_khz: Sequence[float],
+    *, geometry_mode: str = "vertical_legacy",
 ) -> CurveMetrics:
     """Compare predicted f(t) with manual ground truth over the common time span."""
     rt = np.asarray(reference_t_ms, dtype=float)
@@ -49,9 +54,26 @@ def compare_curves(
     ref_duration = max(rt[-1] - rt[0], np.finfo(float).eps)
     coverage = float((hi - lo) / ref_duration)
 
+    geometric = {}
+    if geometry_mode == "square_normals_v1":
+        from chirp_geometry import PROTOCOL, compare_normal_curves
+        geom = compare_normal_curves(rt, rf, pt, pf, np.linspace(rt[0], rt[-1], 50))
+        distances = geom["abs_normal_khz_eq"]
+        valid = geom["covered"]
+        geometric = {
+            "median_abs_error_khz_eq": (float(np.median(distances[valid]))
+                                        if np.any(valid) else None),
+            "p95_abs_error_khz_eq": (float(np.percentile(distances[valid], 95))
+                                     if np.any(valid) else None),
+            "geometric_coverage_fraction": geom["coverage_fraction"],
+            "geometry_protocol": PROTOCOL,
+        }
+    elif geometry_mode != "vertical_legacy":
+        raise ValueError("unknown geometry_mode")
     return CurveMetrics(
         median_abs_error_khz=float(np.median(abs_err)),
         p95_abs_error_khz=float(np.percentile(abs_err, 95)),
         rmse_khz=float(np.sqrt(np.mean(err**2))),
         coverage=float(np.clip(coverage, 0.0, 1.0)),
+        **geometric,
     )

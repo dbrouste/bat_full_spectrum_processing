@@ -137,9 +137,16 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
              max_per_file=None, use_broad_seed=True, evaluate_harmonics=False,
              complete_ends=True, v4_general_min_width_ms=None,
              low_snr_importance_weight=0.2, search_margin_ms=None,
-             trim_echo_rebound=True):
+             trim_echo_rebound=True, geometry_mode="vertical_legacy"):
     if not 0 < low_snr_importance_weight <= 1:
         raise ValueError("low_snr_importance_weight must be in (0, 1]")
+    if geometry_mode not in ("vertical_legacy", "square_normals_v1"):
+        raise ValueError("unknown geometry_mode")
+    if geometry_mode == "square_normals_v1":
+        # Fail early even when no predictions are tracked (no silent downgrade).
+        from chirp_geometry import PROTOCOL
+        if PROTOCOL != geometry_mode:
+            raise ValueError("incompatible chirp_geometry protocol")
     annotations = json.loads(Path(annotation_file).read_text(encoding="utf-8"))
     per_file = []
     details = []
@@ -157,11 +164,13 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         # Fixed STFT reference: the SNR never depends on a predicted trajectory.
         snr_reference = (ReferenceSNR.from_audio(y, int(sr)) if manual else None)
         file_details = []
-        for chirp_id, t, _, reference in manual:
+        for chirp_id, t, f, reference in manual:
             item = dict(file=wav_name, chirp_id=chirp_id,
                         detector_matched=False, tracking_success=False)
             item.update(compare_trajectory(
-                reference, t[0], t[-1], None, snr_reference))
+                reference, t[0], t[-1], None, snr_reference,
+                geometry_mode=geometry_mode,
+                manual_points=np.column_stack((t, f))))
             item["detection_importance_weight"] = float(
                 detection_importance(
                     item["snr_max_db"], min_weight=low_snr_importance_weight))
@@ -191,7 +200,7 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         tolerance_fractions = []
         for candidate_index, manual_index in matches:
             candidate = candidates[candidate_index]
-            chirp_id, t, _, reference = manual[manual_index]
+            chirp_id, t, f, reference = manual[manual_index]
             item = file_details[manual_index]
             item.update(detector_matched=True, candidate_index=candidate_index,
                         peak_time_ms=1000 * float(candidate["time_mid"]),
@@ -213,7 +222,9 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             item["tracking_success"] = curve is not None
             if curve is not None:
                 item.update(compare_trajectory(
-                    reference, t[0], t[-1], curve, snr_reference))
+                    reference, t[0], t[-1], curve, snr_reference,
+                    geometry_mode=geometry_mode,
+                    manual_points=np.column_stack((t, f))))
                 item["points"] = int(len(curve))
                 errors.append(item["mean_full_interval_error_khz"])
                 covers.append(item["coverage_fraction"])
@@ -313,6 +324,8 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             "low_snr_importance_weight": float(low_snr_importance_weight),
             "search_margin_ms": search_margin_ms,
             "trim_echo_rebound": bool(trim_echo_rebound),
+            "scoring_protocol": geometry_mode,
+            "geometric_tolerance_calibrated": False,
         },
         "totals": totals, "per_file": per_file, "details": details,
     }
@@ -341,6 +354,11 @@ def main():
     parser.add_argument("--no-echo-trim", action="store_true",
                         help="Disable the late FM rebound/echo stopping rule "
                              "to benchmark the previous tracking behavior")
+    parser.add_argument("--geometry-mode",
+                        choices=("vertical_legacy", "square_normals_v1"),
+                        default="vertical_legacy",
+                        help="Select geometric square normals (requires chirp_geometry) "
+                             "or reproduce the historical vertical benchmark")
     parser.add_argument("--output", default=None,
                         help="Optional output JSON report")
     args = parser.parse_args()
@@ -353,6 +371,7 @@ def main():
         low_snr_importance_weight=args.low_snr_weight,
         search_margin_ms=args.search_margin_ms,
         trim_echo_rebound=not args.no_echo_trim,
+        geometry_mode=args.geometry_mode,
     )
     report = json.dumps(result, indent=2, ensure_ascii=False)
     if args.output:

@@ -108,6 +108,47 @@ def test_missing_ends_are_penalized_and_coverage_reported():
     assert score["end_error_ms"] == pytest.approx(2)
 
 
+
+def test_square_normal_benchmark_uses_manual_calibration_and_separates_vertical():
+    pytest.importorskip("chirp_geometry")
+    from chirp_geometry import reference_normals
+
+    t = np.array([0.020, 0.024])
+    f = np.array([120_000.0, 40_000.0])
+    manual = np.column_stack((t, f))
+    reference = lambda x: np.interp(x, t, f)
+    sample = reference_normals(t * 1000, f / 1000, t * 1000)
+    offset = 3.0
+    scale = sample["time_scale_khz_per_ms"]
+    auto_t = t + offset * sample["normal_u"] / (scale * 1000)
+    auto_f = f + offset * sample["normal_f"] * 1000
+    scores = compare_trajectory(
+        reference, t[0], t[-1], np.column_stack((auto_t, auto_f)),
+        _ConstantSNR(35), manual_points=manual,
+        geometry_mode="square_normals_v1")
+    assert scores["mean_geometric_error_khz_eq"] == pytest.approx(3, abs=1e-7)
+    assert scores["geometric_coverage_fraction"] == 1
+    assert scores["scoring_protocol"] == "square_normals_v1"
+    assert scores["mean_full_interval_error_khz"] > 0
+    assert scores["tolerance_units"] == "kHz_eq"
+
+
+def test_square_normal_missing_ends_are_uncovered_not_extrapolated():
+    pytest.importorskip("chirp_geometry")
+    t = np.array([0.020, 0.024])
+    f = np.array([120_000., 40_000.])
+    reference = lambda x: np.interp(x, t, f)
+    pred_t = np.array([0.0208, 0.0232])
+    pred_f = reference(pred_t)
+    score = compare_trajectory(
+        reference, t[0], t[-1], np.column_stack((pred_t, pred_f)),
+        _ConstantSNR(35), manual_points=np.column_stack((t, f)),
+        geometry_mode="square_normals_v1")
+    assert .5 < score["geometric_coverage_fraction"] < .7
+    assert score["within_snr_tolerance_fraction"] < .7
+    assert score["mean_geometric_error_khz_eq"] == pytest.approx(0, abs=1e-7)
+
+
 def test_reference_snr_follows_manual_frequency_and_is_finite():
     sr = 96_000
     t = np.arange(int(0.05 * sr)) / sr
