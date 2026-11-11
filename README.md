@@ -79,6 +79,32 @@ The current legacy/modelling pipeline also imports `librosa`. If it is not alrea
 pip install librosa
 ```
 
+## Shared square-normal geometry (Bat-Chirp-Laboratory)
+
+The chirp geometry code has a single source of truth in the sibling
+[Bat-Chirp-Laboratory](https://github.com/dbrouste/Bat-Chirp-Laboratory)
+repository, package `chirp_geometry`. It calibrates the manual chirp as
+a square in time–frequency coordinates and measures errors along local
+perpendiculars in geometric `kHz_eq`, independently of the display zoom.
+The predicted chirp never determines the normalization.
+
+For direct benchmarking from this repository, install the shared module
+in your active Python environment (with both repositories cloned as siblings):
+
+```powershell
+python -m pip install -e ..\Bat-Chirp-Laboratory
+python -m benchmark.reassignment_detector_seeds manual.json D:\Bat\WAV --geometry-mode square_normals_v1
+```
+
+The default direct CLI remains `vertical_legacy` to preserve existing uses.
+`Bat-Chirp-Laboratory` explicitly selects `square_normals_v1` by default.
+The legacy `*_khz` errors remain **vertical frequency diagnostics**, while
+new `*_khz_eq` errors represent square-normal distances. SNR tolerances
+of 3–5 `kHz_eq` are **provisional**, not empirically calibrated.
+`benchmark.compare_reports` refuses comparisons between incompatible
+scoring protocols. The complete extension/fragmentation penalties are not
+yet included in the geometric evaluator.
+
 ## Manual annotation tool
 
 The annotator is currently the main tool used to build the ground-truth dataset.
