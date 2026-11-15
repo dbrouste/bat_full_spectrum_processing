@@ -197,8 +197,8 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         summary = dict(file=wav_name, annotated=len(manual),
                        candidates=len(candidates), matched=len(matches),
                        unmatched_annotations=len(manual) - len(matches),
-                       # With only a subset of manual chirps, other candidates
-                       # cannot fairly be counted as unmatched proposals.
+                       # Manual annotations are non-exhaustive even in annotated WAVs.
+                       # This count is not a count of false positives or echoes.
                        unmatched_candidates=(len(candidates) - len(matches)
                                              if max_per_file is None else None),
                        ignored_automatic_proposals=sum(
@@ -256,8 +256,9 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
         summary.update(
             tracking_succeeded=len(errors),
             detector_match_recall=(len(matches) / len(manual) if manual else None),
-            detector_match_precision=(len(matches) / len(candidates)
-                                      if candidates and max_per_file is None else None),
+            # Precision is undefined with positive-only, non-exhaustive
+            # labels: unmatched candidates may be real unannotated calls.
+            detector_match_precision=None,
             mean_tracking_error_khz=(float(np.mean(errors)) if errors else None),
             mean_tracking_coverage=(float(np.mean(covers)) if covers else None),
             mean_normalized_error=(float(np.mean(normalized_errors))
@@ -323,7 +324,11 @@ def evaluate(annotation_file, wav_dir, *, n_fft=None, hop=None,
             "git_commit": commit,
             "git_dirty": git_dirty,
             "snr_reference": "STFT flattop 512, hop 64; median dB noise per frequency",
-            "ground_truth": "manual + validated only",
+            "ground_truth": "manual + validated positive references only",
+            "annotations_exhaustive": False,
+            "precision_and_false_positive_rate_measurable": False,
+            "unmatched_candidates_meaning": (
+                "unmatched with validated manual references; correctness unknown"),
             "annotations": str(annotation_file),
             "n_fft": n_fft,
             "hop": hop,
