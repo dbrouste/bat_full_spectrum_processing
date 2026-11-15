@@ -202,6 +202,11 @@ def test_end_to_end_benchmark_counts_only_manual_and_scores_unmatched(tmp_path, 
     assert report["totals"]["ignored_automatic_proposals"] == 2
     assert report["totals"]["matched"] == 1
     assert report["totals"]["tracked"] == 1
+    assert report["metadata"]["annotations_exhaustive"] is False
+    assert report["metadata"]["precision_and_false_positive_rate_measurable"] is False
+    # The missing second annotation is a false negative; extra detector
+    # candidates would still be UNKNOWN, not confirmed false positives.
+    assert report["per_file"][0]["detector_match_precision"] is None
     assert report["totals"]["detection_importance"]["at_or_below_15_db"] == .35
     assert report["details"][0]["detection_importance_weight"] == pytest.approx(.35)
     assert report["totals"]["full_pipeline_within_tolerance_fraction"] <= 0.5
