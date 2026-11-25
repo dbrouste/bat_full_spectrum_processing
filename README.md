@@ -24,6 +24,7 @@ Still under development:
 
 - final ridge API;
 - higher-level feature extraction;
+- [ ] **Linear Frequency Cepstral Coefficients (LFCC)** — implement per-chirp extraction in `bat_analysis/features.py` with configurable linearly spaced frequency filters (ultrasonic band bounded by Nyquist), frame length/hop, number of filters and coefficients; export frame-level coefficients and fixed-length per-chirp summaries (mean/std); evaluate on annotated calls for robustness to SNR, gain and duration, and compare clustering/classification performance against existing geometric features and MFCCs without changing the detection/tracking defaults;
 - final chirp-shape modelling / parameterization;
 - complete automated benchmark workflow.
 
